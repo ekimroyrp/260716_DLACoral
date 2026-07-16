@@ -20,11 +20,16 @@ export function createInitialAppState(): MutableAppState {
 }
 
 export function cloneDlaSnapshot(snapshot: DlaSnapshot): DlaSnapshot {
-  return {
+  const cloned = {
     ...snapshot,
     positions: snapshot.positions.slice(),
     enclosed: snapshot.enclosed.slice(),
   };
+  const gpuSnapshot = snapshot as DlaSnapshot & { walkerState?: Int32Array };
+  if (gpuSnapshot.walkerState instanceof Int32Array) {
+    (cloned as DlaSnapshot & { walkerState: Int32Array }).walkerState = gpuSnapshot.walkerState.slice();
+  }
+  return cloned;
 }
 
 export function createAppSnapshot(state: MutableAppState, aggregate?: DlaSnapshot): AppSnapshot {

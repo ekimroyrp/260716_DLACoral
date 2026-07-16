@@ -8,6 +8,7 @@
 - Point, spherical-shell, and ring seed shapes
 - Adjustable sticking neighborhood, neighbor threshold, sticking chance, walker pool, launch/kill padding, and growth batch
 - Shared detail-adjustable icosphere mesh with indirect instanced rendering
+- Neighborhood-aware zero-gap sphere contact for face, edge, and corner attachments
 - Inner-to-outer color gradient based on particle birth order
 - Studio lighting, soft shadows, ACES tone mapping, and bloom
 - Start/Pause, Reset, Simulation Rate, and branchable Simulation Timeline
@@ -48,6 +49,7 @@ npm test
 - Middle mouse drag: pan
 - Right mouse drag: orbit camera
 - Left mouse drag on the canvas: rotate the aggregate
+- Growth, timeline changes, resets, and settings never reframe the camera; only mouse navigation changes its pose and target
 - Right-click browser menus are disabled inside the app
 
 ### Simulation
@@ -82,11 +84,15 @@ Starting from an earlier timeline point removes the later future and grows a new
 | Sphere Detail | 0 | `0–2`, step `1` (60 / 240 / 960 vertices) |
 | Hide Enclosed | On | Omits fully surrounded particles from drawing |
 
+`Stick Neighbors` is the preferred occupied-neighbor threshold. While the aggregate is bootstrapping, growth uses the densest available candidates until that threshold becomes achievable.
+
 `Growth Batch = 1` commits one attachment per compute epoch. Larger values accept a bounded deterministic batch evaluated against the same pre-commit aggregate. The GPU device limit can reduce exceptionally large typed targets, walker pools, or seed shells.
+
+At `Sphere Gap = 0`, sphere geometry is calibrated for the selected 6, 18, or 26-cell neighborhood so every permitted neighboring attachment touches or overlaps. Increasing Sphere Gap separates the spheres proportionally.
 
 ### Display
 
-All seed particles use Inner Color. Attached particles interpolate by birth rank, and the newest displayed attachment reaches Outer Color exactly.
+All seed particles use Inner Color. Attached particles interpolate by birth rank, and the newest displayed attachment reaches Outer Color exactly. Hex channels use the same brightness/contrast grading convention as AutomataChunks.
 
 | Control | Default | Initial range / step |
 |---|---:|---|
@@ -115,7 +121,7 @@ Every continuous slider has a selectable numeric input. Enter or blur commits a 
 - Ctrl/Cmd+Z: undo
 - Ctrl/Cmd+Y or Shift+Ctrl/Cmd+Z: redo
 - History covers deliberate control changes, Start/Pause, Reset, committed timeline seeks and branches, and complete model-rotation gestures.
-- Automatic simulation ticks and camera navigation are excluded. History retains up to 120 actions and budgets compact aggregate snapshots to 128 MiB.
+- Automatic simulation ticks and camera navigation are excluded. History retains up to 120 actions and budgets losslessly compressed aggregate snapshots to 128 MiB while preserving exact walker continuation state.
 
 ### Export
 
@@ -127,4 +133,4 @@ Export filenames begin with `260716_DLAFractals`.
 
 ## Architecture
 
-The live path uses raw WGSL compute buffers for walkers, occupied/frontier hash cells, cached neighbor counts, birth-ordered particles, instance matrices, birth ranks, counters, and indirect draw arguments. Normal growth reads back only a persistent 32-byte status buffer; sphere rendering remains one indirect instanced draw per render pass with no per-particle JavaScript render loop. Uniform spherical launches, nearby kill-radius recycling, squared-distance checks, neighbor caching, enclosed-particle hiding, and adaptive update work follow the practical guidance in [Softology's 3D DLA notes](https://softologyblog.wordpress.com/2017/05/22/pushing-3d-diffusion-limited-aggregation-even-further/).
+The live path uses raw WGSL compute buffers for walkers, occupied/frontier hash cells, cached neighbor counts, birth-ordered particles, instance matrices, birth ranks, counters, and indirect draw arguments. The sparse hash starts at the active seed size and grows on the GPU with projected 70% headroom instead of allocating its one-million-particle maximum at startup. Normal growth reads back only a persistent 40-byte status buffer; sphere rendering remains one indirect instanced draw per render pass with no per-particle JavaScript render loop. Uniform spherical launches, nearby kill-radius recycling, squared-distance checks, neighbor caching, enclosed-particle hiding, and adaptive update work follow the practical guidance in [Softology's 3D DLA notes](https://softologyblog.wordpress.com/2017/05/22/pushing-3d-diffusion-limited-aggregation-even-further/).

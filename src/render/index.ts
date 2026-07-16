@@ -13,3 +13,4 @@ export {
   createObjBlob,
   type ExportInstanceData,
 } from './modelExport';
+export { createDisplayColor, setDisplayColor } from './displayColor';

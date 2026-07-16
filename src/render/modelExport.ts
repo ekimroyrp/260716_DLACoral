@@ -1,7 +1,6 @@
 import {
   BufferAttribute,
   BufferGeometry,
-  Color,
   InstancedBufferAttribute,
   InstancedMesh,
   Matrix3,
@@ -13,9 +12,10 @@ import {
   Vector3,
 } from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { createDisplayColor } from './displayColor';
 
 const DEG_TO_RAD = Math.PI / 180;
-const OBJ_ASYNC_BATCH_SIZE = 256;
+const OBJ_ASYNC_VERTEX_BUDGET = 15_360;
 
 export interface ExportInstanceData {
   matrices: Float32Array;
@@ -40,8 +40,8 @@ export interface ExportInstanceData {
  */
 export function createAgeGradientColors(data: ExportInstanceData): Float32Array {
   const colors = new Float32Array(data.count * 3);
-  const inner = new Color(data.innerColor);
-  const outer = new Color(data.outerColor);
+  const inner = createDisplayColor(data.innerColor);
+  const outer = createDisplayColor(data.outerColor);
   const attachedCount = Math.max(1, data.gradientCount - Math.max(0, data.seedCount));
 
   for (let i = 0; i < data.count; i++) {
@@ -92,6 +92,7 @@ export async function createObjBlob(data: ExportInstanceData): Promise<Blob> {
   ];
   const colors = createAgeGradientColors(data);
   const vertexCount = data.spherePositions.length / 3;
+  const instancesPerBatch = Math.max(1, Math.floor(OBJ_ASYNC_VERTEX_BUDGET / vertexCount));
   const objectMatrix = createObjectMatrix(data);
   const instanceMatrix = new Matrix4();
   const worldMatrix = new Matrix4();
@@ -128,7 +129,7 @@ export async function createObjBlob(data: ExportInstanceData): Promise<Blob> {
       batch += `f ${a}//${a} ${b}//${b} ${c}//${c}\n`;
     }
 
-    if ((instanceIndex + 1) % OBJ_ASYNC_BATCH_SIZE === 0) {
+    if ((instanceIndex + 1) % instancesPerBatch === 0) {
       chunks.push(batch);
       batch = '';
       await yieldToBrowser();

@@ -38,6 +38,30 @@ describe('UI numeric controllers', () => {
     expect(controller.dla.seed).toBe(1_200_000);
   });
 
+  it('commits typed values on blur even when no change event is emitted', () => {
+    const changes = vi.fn();
+    controller = createUiController({ onDlaChange: changes });
+    const field = input('sphere-scale-value');
+
+    field.focus();
+    field.value = '0.73';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.blur();
+
+    expect(controller.dla.sphereScale).toBe(0.73);
+    expect(changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sphereScale: 0.73 }),
+      expect.objectContaining({ source: 'sphereScale', phase: 'commit' }),
+    );
+
+    field.focus();
+    field.value = '';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.blur();
+    expect(field.value).toBe('0.73');
+    expect(controller.dla.sphereScale).toBe(0.73);
+  });
+
   it('coalesces a slider gesture into one transaction', () => {
     const starts = vi.fn();
     const commits = vi.fn();
@@ -104,12 +128,56 @@ describe('UI DLA and timeline invariants', () => {
     expect(controller.simulation.timeline).toBe(10);
     expect(commits).toHaveBeenLastCalledWith(10);
   });
+
+  it('preserves the run state when Reset is requested', () => {
+    const resets = vi.fn();
+    controller = createUiController({ onReset: resets });
+    controller.setRunning(true);
+
+    requiredButton('reset-sim').click();
+
+    expect(resets).toHaveBeenCalledTimes(1);
+    expect(controller.simulation.running).toBe(true);
+  });
+});
+
+describe('UI global shortcuts and browser-menu blocking', () => {
+  it('handles undo and redo outside fields while leaving field editing alone', () => {
+    const undo = vi.fn();
+    const redo = vi.fn();
+    controller = createUiController({ onUndo: undo, onRedo: redo });
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'y', metaKey: true }));
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(redo).toHaveBeenCalledTimes(2);
+
+    const field = input('seed-value');
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+    expect(undo).toHaveBeenCalledTimes(1);
+  });
+
+  it('prevents the native context menu globally', () => {
+    controller = createUiController();
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
 });
 
 function input(id: string): HTMLInputElement {
   const element = document.getElementById(id);
   if (!(element instanceof HTMLInputElement)) {
     throw new Error(`Missing input #${id}`);
+  }
+  return element;
+}
+
+function requiredButton(id: string): HTMLButtonElement {
+  const element = document.getElementById(id);
+  if (!(element instanceof HTMLButtonElement)) {
+    throw new Error(`Missing button #${id}`);
   }
   return element;
 }

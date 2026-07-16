@@ -278,6 +278,12 @@ select {
   letter-spacing: 0.01em;
 }
 
+.control-help {
+  color: rgba(190, 195, 205, 0.76);
+  font-size: 0.66rem;
+  line-height: 1.35;
+}
+
 .control-subhead {
   margin: 4px 0 -1px;
   color: rgba(245, 246, 249, 0.92);
@@ -595,7 +601,7 @@ input[type="range"]::-moz-range-thumb {
   #ui-panel {
     top: 12px;
     left: 12px;
-    width: min(290px, calc(100vw - 24px));
+    width: min(320px, calc(100vw - 24px));
     max-height: calc((100vh - 24px) / var(--menu-scale));
   }
 }

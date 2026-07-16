@@ -1,15 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
   SparseCellHash,
+  MAX_COMPACT_SEED_RADIUS,
   buildNeighborMetadata,
   colorAtBirth,
+  countSeedPositions,
+  effectiveStickThreshold,
   countOccupiedNeighbors,
   evaluateCandidate,
   generateSeedPositions,
   getNeighborOffsets,
   hashCell,
+  initialSparseHashCapacity,
   isOutsideKillRadius,
+  maxSeedRadiusForCapacity,
   packCellKey,
+  projectedSparseHashCapacity,
   selectGrowthBatch,
   uniformSphereLaunch,
   unpackCellKey,
@@ -38,6 +44,25 @@ describe('DLA seed generation', () => {
     expect(seed.length).toBeGreaterThan(20);
     expect(seed.every(({ y }) => y === 0)).toBe(true);
   });
+
+  it('keeps larger shell generation deterministic and unique', () => {
+    const first = generateSeedPositions('sphere', 32);
+    const second = generateSeedPositions('sphere', 32);
+    expect(second).toEqual(first);
+    expect(new Set(first.map(({ x, y, z }) => `${x},${y},${z}`)).size).toBe(first.length);
+  });
+
+  it('counts structural seeds before allocation and finds the capacity-safe radius', () => {
+    for (const shape of ['point', 'sphere', 'ring'] as const) {
+      for (const radius of [1, 5, 16]) {
+        expect(countSeedPositions(shape, radius)).toBe(generateSeedPositions(shape, radius).length);
+      }
+    }
+    const maximum = maxSeedRadiusForCapacity('sphere', 25_000, MAX_COMPACT_SEED_RADIUS);
+    expect(countSeedPositions('sphere', maximum)).toBeLessThanOrEqual(25_000);
+    expect(countSeedPositions('sphere', maximum + 1)).toBeGreaterThan(25_000);
+    expect(maxSeedRadiusForCapacity('ring', 25_000, MAX_COMPACT_SEED_RADIUS)).toBe(MAX_COMPACT_SEED_RADIUS);
+  });
 });
 
 describe('DLA deterministic walker helpers', () => {
@@ -57,6 +82,22 @@ describe('DLA deterministic walker helpers', () => {
 });
 
 describe('DLA sparse occupancy and neighbor metadata', () => {
+  it('starts the GPU hash from the active aggregate and grows with bounded headroom', () => {
+    const maximum = 8_388_608;
+    expect(initialSparseHashCapacity(1, maximum)).toBe(64);
+    expect(initialSparseHashCapacity(1_000_000, maximum)).toBe(8_388_608);
+    expect(projectedSparseHashCapacity(64, 27, 256, maximum)).toBe(16_384);
+    expect(projectedSparseHashCapacity(4_096, 2_800, 40, maximum)).toBe(8_192);
+    expect(projectedSparseHashCapacity(8_192, 100, 0, maximum)).toBe(8_192);
+    expect(projectedSparseHashCapacity(maximum, maximum - 1, 4_096, maximum)).toBe(maximum);
+    expect(() => initialSparseHashCapacity(1_100_000, maximum)).toThrow(/above the device limit/);
+  });
+
+  it('reserves one compact-lattice cell around the largest structural seed', () => {
+    expect(MAX_COMPACT_SEED_RADIUS).toBe(510);
+    expect(packCellKey({ x: MAX_COMPACT_SEED_RADIUS + 1, y: 0, z: 0 })).toBeDefined();
+  });
+
   it('packs compact hash coordinates exactly without key collisions', () => {
     const samples = [
       { x: -512, y: -512, z: -512 },
@@ -138,6 +179,25 @@ describe('DLA candidate and batch rules', () => {
     ).toBe(false);
   });
 
+  it('uses the preferred stick threshold when attainable and bootstraps to the densest frontier', () => {
+    expect(effectiveStickThreshold(6, 1)).toBe(1);
+    expect(effectiveStickThreshold(6, 4)).toBe(4);
+    expect(effectiveStickThreshold(2, 4)).toBe(2);
+    expect(effectiveStickThreshold(18, 0)).toBe(1);
+    expect(
+      evaluateCandidate(
+        { x: 1, y: 0, z: 0 },
+        occupied,
+        {
+          neighborhood: 6,
+          stickNeighbors: effectiveStickThreshold(6, 1),
+          stickChance: 1,
+          roll: 0,
+        },
+      ).accepted,
+    ).toBe(true);
+  });
+
   it('makes Growth Batch 1 strict and larger batches bounded and de-duplicated', () => {
     const candidates = [
       { x: 1, y: 0, z: 0 },
@@ -151,6 +211,29 @@ describe('DLA candidate and batch rules', () => {
       { x: 1, y: 0, z: 0 },
       { x: 0, y: 1, z: 0 },
     ]);
+  });
+});
+
+describe('DLA timeline reconstruction and branching', () => {
+  it('recomputes cached enclosure metadata from the displayed birth prefix', () => {
+    const positions = [{ x: 0, y: 0, z: 0 }, ...getNeighborOffsets(26)];
+    const partial = buildNeighborMetadata(positions.slice(0, 20));
+    const complete = buildNeighborMetadata(positions);
+    expect(partial.neighborCounts[0]).toBe(19);
+    expect(partial.enclosedAt[0]).toBe(0xffff_ffff);
+    expect(complete.neighborCounts[0]).toBe(26);
+    expect(complete.enclosedAt[0]).toBe(26);
+  });
+
+  it('makes trimmed future cells available to a deterministic branch', () => {
+    const seedOnly = new SparseCellHash();
+    seedOnly.set({ x: 0, y: 0, z: 0 }, 0);
+    const withFuture = new SparseCellHash();
+    withFuture.set({ x: 0, y: 0, z: 0 }, 0);
+    withFuture.set({ x: 1, y: 0, z: 0 }, 1);
+    const options = { neighborhood: 6 as const, stickNeighbors: 1, stickChance: 1, roll: 0 };
+    expect(evaluateCandidate({ x: 1, y: 0, z: 0 }, withFuture, options).accepted).toBe(false);
+    expect(evaluateCandidate({ x: 1, y: 0, z: 0 }, seedOnly, options).accepted).toBe(true);
   });
 });
 

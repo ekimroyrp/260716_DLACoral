@@ -188,6 +188,7 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     const slider = requiredElement(id, HTMLInputElement);
     const valueInput = requiredElement(`${id}-value`, HTMLInputElement);
     const transaction = makeTransaction(label);
+    let valueInputDirty = false;
 
     const set = (rawValue: number): number => {
       const normalized = normalizeNumericValue(sanitize(rawValue), decimals, integer);
@@ -224,23 +225,10 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     });
     listen(slider, 'pointercancel', () => transaction.commit());
 
-    listen(valueInput, 'focus', () => valueInput.select());
-    listen(valueInput, 'input', () => transaction.begin());
-    listen(valueInput, 'keydown', (event) => {
-      const keyboardEvent = event as KeyboardEvent;
-      if (keyboardEvent.key === 'Enter') {
-        keyboardEvent.preventDefault();
-        valueInput.blur();
-      } else if (keyboardEvent.key === 'Escape') {
-        keyboardEvent.preventDefault();
-        setValueInput(valueInput, Number.parseFloat(slider.value), decimals, true);
-        transaction.commit();
-        valueInput.blur();
-      }
-    });
-    listen(valueInput, 'change', () => {
+    const commitValueInput = (): void => {
       transaction.begin();
       const parsed = Number.parseFloat(valueInput.value);
+      valueInputDirty = false;
       if (!Number.isFinite(parsed)) {
         setValueInput(valueInput, Number.parseFloat(slider.value), decimals, true);
         transaction.commit();
@@ -249,8 +237,37 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
       const value = set(parsed);
       onValue(value, 'commit');
       transaction.commit();
+    };
+
+    listen(valueInput, 'focus', () => {
+      valueInputDirty = false;
+      valueInput.select();
     });
-    listen(valueInput, 'blur', () => transaction.commit());
+    listen(valueInput, 'input', () => {
+      valueInputDirty = true;
+      transaction.begin();
+    });
+    listen(valueInput, 'keydown', (event) => {
+      const keyboardEvent = event as KeyboardEvent;
+      if (keyboardEvent.key === 'Enter') {
+        keyboardEvent.preventDefault();
+        valueInput.blur();
+      } else if (keyboardEvent.key === 'Escape') {
+        keyboardEvent.preventDefault();
+        valueInputDirty = false;
+        setValueInput(valueInput, Number.parseFloat(slider.value), decimals, true);
+        transaction.commit();
+        valueInput.blur();
+      }
+    });
+    listen(valueInput, 'change', commitValueInput);
+    listen(valueInput, 'blur', () => {
+      if (valueInputDirty) {
+        commitValueInput();
+      } else {
+        transaction.commit();
+      }
+    });
 
     set(Number.parseFloat(slider.value));
 

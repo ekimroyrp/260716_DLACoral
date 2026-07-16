@@ -21,4 +21,26 @@ describe('app state snapshots', () => {
     expect(snapshot.aggregate?.positions[0]).toBe(0);
     expect(snapshot.display.innerColor).toBe('#6b2f24');
   });
+
+  it('copies optional GPU walker state used by exact history restores', () => {
+    const state = createInitialAppState();
+    const walkerState = new Int32Array([1, 2, 3, 4]);
+    const aggregate = {
+      positions: new Int32Array([0, 0, 0]),
+      enclosed: new Uint8Array([0]),
+      seedCount: 1,
+      currentCount: 1,
+      latestCount: 1,
+      maxRadiusSq: 0,
+      rngState: 1,
+      branchSerial: 0,
+      walkerState,
+    };
+
+    const snapshot = createAppSnapshot(state, aggregate);
+    walkerState[0] = 99;
+
+    const clonedWalkerState = (snapshot.aggregate as typeof aggregate | undefined)?.walkerState;
+    expect(clonedWalkerState?.[0]).toBe(1);
+  });
 });

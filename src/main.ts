@@ -1,7 +1,18 @@
 import './style.css';
 
-import { generateSeedPositions, GpuDlaSimulator } from './dla';
-import { ActionHistory, estimateSnapshotBytes } from './history';
+import {
+  countSeedPositions,
+  GpuDlaSimulator,
+  maxSeedRadiusForCapacity,
+} from './dla';
+import {
+  ActionHistory,
+  areHistorySnapshotsEquivalent,
+  compressDlaSnapshot,
+  decompressDlaSnapshot,
+  estimateSnapshotBytes,
+  type CompressedDlaSnapshot,
+} from './history';
 import { DlaRenderer, type RotationPhase } from './render';
 import {
   applySettingsSnapshot,
@@ -9,7 +20,7 @@ import {
   createInitialAppState,
   type MutableAppState,
 } from './state';
-import type { AppSnapshot, DlaSnapshot } from './types';
+import type { AppSnapshot } from './types';
 import {
   createUiController,
   type DlaUiChangeMeta,
@@ -22,11 +33,12 @@ type DlaStatus = ReturnType<GpuDlaSimulator['getStatus']>;
 interface PendingTransaction {
   label: string;
   before: HistorySnapshot;
-  beforeAggregate?: Promise<DlaSnapshot>;
+  beforeAggregate?: Promise<CompressedDlaSnapshot>;
   heavy: boolean;
 }
 
-interface HistorySnapshot extends AppSnapshot {
+interface HistorySnapshot extends Omit<AppSnapshot, 'aggregate'> {
+  aggregate?: CompressedDlaSnapshot;
   actionLabel?: string;
 }
 
@@ -89,7 +101,6 @@ async function initialize(): Promise<void> {
 
     activeRenderer.update(state.dla, state.display, renderState(status));
     activeRenderer.setModelRotation(state.dla.rotation);
-    activeRenderer.frameCamera(status.maxRadiusSq, true);
     syncStatus(status);
     ui.sync(state);
     ui.setReady();
@@ -271,7 +282,6 @@ async function resetAggregate(message: string): Promise<void> {
     const next = await activeSimulator.initialize(state.dla, targets);
     status = next;
     syncStatus(next);
-    activeRenderer.frameCamera(next.maxRadiusSq, true);
   } finally {
     ui.setReady();
   }
@@ -328,7 +338,6 @@ function syncStatus(next: DlaStatus): void {
   const activeRenderer = renderer;
   if (activeRenderer) {
     activeRenderer.update(state.dla, state.display, renderState(next));
-    activeRenderer.frameCamera(next.maxRadiusSq);
   }
 }
 
@@ -337,6 +346,7 @@ function renderState(next: DlaStatus) {
     displayedCount: next.visibleCount,
     totalCount: next.currentCount,
     seedCount: next.seedCount,
+    newestVisibleBirth: next.newestVisibleBirth,
     maxRadiusSq: next.maxRadiusSq,
   };
 }
@@ -348,11 +358,11 @@ function beginTransaction(label: string): void {
   const heavy = transactionNeedsAggregate(label);
   const transaction: PendingTransaction = {
     label,
-    before: createAppSnapshot(state),
+    before: createHistorySnapshot(),
     heavy,
   };
   if (heavy && simulator) {
-    transaction.beforeAggregate = serial(() => requireSimulator().snapshot());
+    transaction.beforeAggregate = serial(async () => compressDlaSnapshot(await requireSimulator().snapshot()));
   }
   pendingTransaction = transaction;
 }
@@ -363,7 +373,7 @@ function commitTransaction(label: string): void {
     return;
   }
   pendingTransaction = null;
-  const after: HistorySnapshot = createAppSnapshot(state);
+  const after = createHistorySnapshot();
   transaction.before.actionLabel = label;
   after.actionLabel = label;
 
@@ -376,7 +386,7 @@ function commitTransaction(label: string): void {
     if (transaction.beforeAggregate) {
       transaction.before.aggregate = await transaction.beforeAggregate;
     }
-    after.aggregate = await requireSimulator().snapshot();
+    after.aggregate = compressDlaSnapshot(await requireSimulator().snapshot());
     pushHistory(transaction.before, after);
   });
 }
@@ -389,7 +399,7 @@ function transactionNeedsAggregate(label: string): boolean {
 }
 
 function pushHistory(before: HistorySnapshot, after: HistorySnapshot): void {
-  if (snapshotsEquivalent(before, after)) {
+  if (areHistorySnapshotsEquivalent(before, after)) {
     return;
   }
   const bytes = estimateSnapshotBytes(before.aggregate) + estimateSnapshotBytes(after.aggregate);
@@ -419,7 +429,11 @@ function restoreHistorySnapshot(snapshot: HistorySnapshot): void {
     const liveTimeline = status?.attachedCount ?? state.simulation.timeline;
     const liveLatestTimeline = status?.latestAttachedCount ?? state.simulation.latestTimeline;
     const restoreTimeline = snapshot.actionLabel === 'Simulation Timeline';
-    applySettingsSnapshot(state, snapshot);
+    applySettingsSnapshot(state, {
+      simulation: snapshot.simulation,
+      dla: snapshot.dla,
+      display: snapshot.display,
+    });
     if (!snapshot.aggregate && !restoreTimeline) {
       state.simulation.timeline = liveTimeline;
       state.simulation.latestTimeline = liveLatestTimeline;
@@ -440,7 +454,11 @@ function restoreHistorySnapshot(snapshot: HistorySnapshot): void {
 
     let next: DlaStatus;
     if (snapshot.aggregate) {
-      next = await activeSimulator.restore(state.dla, snapshot.aggregate, targets);
+      next = await activeSimulator.restore(
+        state.dla,
+        decompressDlaSnapshot(snapshot.aggregate),
+        targets,
+      );
     } else if (state.dla.targetParticles > activeSimulator.getStatus().particleCapacity) {
       const aggregate = await activeSimulator.snapshot();
       next = await activeSimulator.restore(state.dla, aggregate, targets);
@@ -498,8 +516,9 @@ function enforceDeviceLimits(targetState: MutableAppState): void {
     targetState.dla.seedShape,
     targetState.dla.seedRadius,
     maxParticles,
+    limits.maxSeedRadius,
   );
-  const seedCount = generateSeedPositions(targetState.dla.seedShape, targetState.dla.seedRadius).length;
+  const seedCount = countSeedPositions(targetState.dla.seedShape, targetState.dla.seedRadius);
   targetState.dla.targetParticles = Math.min(
     maxParticles,
     Math.max(seedCount, Math.round(targetState.dla.targetParticles)),
@@ -521,19 +540,17 @@ function clampSeedRadius(
   shape: MutableAppState['dla']['seedShape'],
   radius: number,
   maxParticles: number,
+  latticeMaximum: number,
 ): number {
   const requested = Math.max(1, Math.round(Number.isFinite(radius) ? radius : 1));
   if (shape === 'point') {
     return requested;
   }
-  const estimatedLimit = shape === 'sphere'
-    ? Math.floor(Math.sqrt(maxParticles / (4 * Math.PI)))
-    : Math.min(46_000, Math.floor(maxParticles / (2 * Math.PI)));
-  let safeRadius = Math.min(requested, Math.max(1, estimatedLimit));
-  while (safeRadius > 1 && generateSeedPositions(shape, safeRadius).length > maxParticles) {
-    safeRadius -= 1;
+  const latticeClamped = Math.min(requested, Math.max(1, Math.floor(latticeMaximum)));
+  if (countSeedPositions(shape, latticeClamped) <= maxParticles) {
+    return latticeClamped;
   }
-  return safeRadius;
+  return maxSeedRadiusForCapacity(shape, maxParticles, latticeClamped);
 }
 
 function serial<T>(task: () => Promise<T> | T): Promise<T> {
@@ -555,24 +572,13 @@ function schedule(task: () => Promise<void> | void): void {
   void serial(task).catch(() => undefined);
 }
 
-function snapshotsEquivalent(a: AppSnapshot, b: AppSnapshot): boolean {
-  const settingsA = JSON.stringify({ simulation: a.simulation, dla: a.dla, display: a.display });
-  const settingsB = JSON.stringify({ simulation: b.simulation, dla: b.dla, display: b.display });
-  if (settingsA !== settingsB) {
-    return false;
-  }
-  if (!a.aggregate && !b.aggregate) {
-    return true;
-  }
-  if (!a.aggregate || !b.aggregate) {
-    return false;
-  }
-  return (
-    a.aggregate.currentCount === b.aggregate.currentCount &&
-    a.aggregate.latestCount === b.aggregate.latestCount &&
-    a.aggregate.branchSerial === b.aggregate.branchSerial &&
-    a.aggregate.rngState === b.aggregate.rngState
-  );
+function createHistorySnapshot(): HistorySnapshot {
+  const snapshot = createAppSnapshot(state);
+  return {
+    simulation: snapshot.simulation,
+    dla: snapshot.dla,
+    display: snapshot.display,
+  };
 }
 
 function normalizeRotation(value: number): number {

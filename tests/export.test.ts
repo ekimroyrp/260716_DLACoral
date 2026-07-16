@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { createAgeGradientColors, type ExportInstanceData } from '../src/render';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  createAgeGradientColors,
+  createDisplayColor,
+  createGlbBlob,
+  createObjBlob,
+  type ExportInstanceData,
+} from '../src/render';
+import { displayedGradientCount } from '../src/render/dlaRenderer';
 
 function exportData(overrides: Partial<ExportInstanceData> = {}): ExportInstanceData {
   return {
@@ -22,6 +29,13 @@ function exportData(overrides: Partial<ExportInstanceData> = {}): ExportInstance
 }
 
 describe('export age colors', () => {
+  it('matches the reference renderer raw hex-channel convention', () => {
+    const color = createDisplayColor('#4fceee');
+    expect(color.r).toBeCloseTo(0x4f / 0xff, 6);
+    expect(color.g).toBeCloseTo(0xce / 0xff, 6);
+    expect(color.b).toBeCloseTo(0xee / 0xff, 6);
+  });
+
   it('keeps every seed at the inner color and makes the newest attachment exactly outer', () => {
     const colors = createAgeGradientColors(exportData());
     expect([...colors.slice(0, 6)]).toEqual([0, 0, 0, 0, 0, 0]);
@@ -36,4 +50,118 @@ describe('export age colors', () => {
     const graded = createAgeGradientColors(exportData({ brightness: 10, contrast: 10 }));
     expect([...graded].every((value) => value >= 0 && value <= 1)).toBe(true);
   });
+
+  it('normalizes the export gradient to the newest displayed birth rank', () => {
+    const visibleBirths = new Float32Array([0, 1, 4]);
+    expect(displayedGradientCount(visibleBirths, 3, 1)).toBe(5);
+    const colors = createAgeGradientColors(exportData({
+      birthRanks: visibleBirths,
+      count: 3,
+      seedCount: 1,
+      gradientCount: displayedGradientCount(visibleBirths, 3, 1),
+    }));
+    expect([...colors.slice(6, 9)]).toEqual([1, 1, 1]);
+  });
 });
+
+describe('model exports', () => {
+  beforeAll(() => {
+    vi.stubGlobal('FileReader', TestFileReader);
+  });
+
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('writes GLB transforms and age colors with EXT_mesh_gpu_instancing', async () => {
+    const blob = await createGlbBlob(exportData({
+      matrices: translatedIdentityMatrices([0, 0, 0], [2, 3, 4]),
+      birthRanks: new Float32Array([0, 1]),
+      count: 2,
+      seedCount: 1,
+      gradientCount: 2,
+      spherePositions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      sphereNormals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+      sphereScale: 0.75,
+      rotationDegrees: 30,
+    }));
+    const json = parseGlbJson(await blob.arrayBuffer());
+    expect(json.extensionsUsed).toContain('EXT_mesh_gpu_instancing');
+    expect(json.extensionsRequired).toContain('EXT_mesh_gpu_instancing');
+
+    const node = json.nodes.find(
+      (candidate: { name?: string }) => candidate.name === '260716_DLAFractals',
+    );
+    const attributes = node.extensions.EXT_mesh_gpu_instancing.attributes;
+    expect(Object.keys(attributes)).toEqual(expect.arrayContaining([
+      'TRANSLATION',
+      'ROTATION',
+      'SCALE',
+      '_COLOR_0',
+    ]));
+    expect(json.accessors[attributes.TRANSLATION].count).toBe(2);
+    expect(json.accessors[attributes._COLOR_0].count).toBe(2);
+    expect(node.matrix).toHaveLength(16);
+    expect(Math.hypot(node.matrix[0], node.matrix[1], node.matrix[2])).toBeCloseTo(0.75, 6);
+  });
+
+  it('expands every displayed sphere into colored OBJ triangles', async () => {
+    const blob = await createObjBlob(exportData({
+      matrices: translatedIdentityMatrices([0, 0, 0], [2, 0, 0]),
+      birthRanks: new Float32Array([0, 1]),
+      count: 2,
+      seedCount: 1,
+      gradientCount: 2,
+      spherePositions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      sphereNormals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+    }));
+    const lines = (await blob.text()).trim().split('\n');
+    expect(lines.filter((line) => line.startsWith('v '))).toHaveLength(6);
+    expect(lines.filter((line) => line.startsWith('vn '))).toHaveLength(6);
+    expect(lines.filter((line) => line.startsWith('f '))).toHaveLength(2);
+    expect(lines.find((line) => line.startsWith('v 0 0 0 '))).toBe('v 0 0 0 0 0 0');
+    expect(lines.find((line) => line.startsWith('v 2 0 0 '))).toBe('v 2 0 0 1 1 1');
+  });
+});
+
+function translatedIdentityMatrices(...translations: Array<[number, number, number]>): Float32Array {
+  const matrices = new Float32Array(translations.length * 16);
+  translations.forEach(([x, y, z], index) => {
+    const offset = index * 16;
+    matrices[offset] = 1;
+    matrices[offset + 5] = 1;
+    matrices[offset + 10] = 1;
+    matrices[offset + 15] = 1;
+    matrices[offset + 12] = x;
+    matrices[offset + 13] = y;
+    matrices[offset + 14] = z;
+  });
+  return matrices;
+}
+
+function parseGlbJson(buffer: ArrayBuffer): Record<string, any> {
+  const view = new DataView(buffer);
+  expect(view.getUint32(0, true)).toBe(0x46546c67);
+  const jsonLength = view.getUint32(12, true);
+  const json = new TextDecoder().decode(new Uint8Array(buffer, 20, jsonLength)).trim();
+  return JSON.parse(json) as Record<string, any>;
+}
+
+class TestFileReader {
+  result: string | ArrayBuffer | null = null;
+  onloadend: (() => void) | null = null;
+
+  readAsArrayBuffer(blob: Blob): void {
+    void blob.arrayBuffer().then((buffer) => {
+      this.result = buffer;
+      this.onloadend?.();
+    });
+  }
+
+  readAsDataURL(blob: Blob): void {
+    void blob.arrayBuffer().then((buffer) => {
+      this.result = `data:${blob.type};base64,${Buffer.from(buffer).toString('base64')}`;
+      this.onloadend?.();
+    });
+  }
+}

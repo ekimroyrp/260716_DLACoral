@@ -33,6 +33,13 @@ export interface NeighborMetadata {
   enclosedAt: Uint32Array;
 }
 
+/** Preferred stick threshold, reduced only when the epoch cannot attain it. */
+export function effectiveStickThreshold(requested: number, maximumCandidateNeighbors: number): number {
+  const preferred = Math.max(1, Math.floor(Number.isFinite(requested) ? requested : 1));
+  const attainable = Math.max(1, Math.floor(Number.isFinite(maximumCandidateNeighbors) ? maximumCandidateNeighbors : 1));
+  return Math.min(preferred, attainable);
+}
+
 export function hash32(value: number): number {
   let next = value >>> 0;
   next = (next ^ (next >>> 16)) >>> 0;
@@ -133,7 +140,7 @@ export function generateSeedPositions(shape: SeedShape, radius = 1): Int3[] {
     return [{ x: 0, y: 0, z: 0 }];
   }
 
-  const r = Math.max(1, Math.floor(radius));
+  const r = normalizeSeedRadius(radius);
   const innerSq = (r - 0.5) ** 2;
   const outerSq = (r + 0.5) ** 2;
   const positions: Int3[] = [];
@@ -154,6 +161,57 @@ export function generateSeedPositions(shape: SeedShape, radius = 1): Int3[] {
   return positions.length > 0 ? positions : [{ x: r, y: 0, z: 0 }];
 }
 
+/** Exact seed size without allocating per-cell objects. */
+export function countSeedPositions(shape: SeedShape, radius = 1): number {
+  if (shape === 'point') {
+    return 1;
+  }
+
+  const r = normalizeSeedRadius(radius);
+  const innerSq = (r - 0.5) ** 2;
+  const outerSq = (r + 0.5) ** 2;
+  let count = 0;
+  if (shape === 'ring') {
+    for (let z = -r; z <= r; z += 1) {
+      count += shellXCount(innerSq, outerSq, z * z);
+    }
+    return Math.max(1, count);
+  }
+
+  for (let z = -r; z <= r; z += 1) {
+    for (let y = -r; y <= r; y += 1) {
+      count += shellXCount(innerSq, outerSq, y * y + z * z);
+    }
+  }
+  return Math.max(1, count);
+}
+
+/** Largest exact structural seed radius that fits both particle and lattice capacity. */
+export function maxSeedRadiusForCapacity(
+  shape: SeedShape,
+  particleCapacity: number,
+  latticeMaximum: number,
+): number {
+  const maximum = Math.max(1, Math.floor(latticeMaximum));
+  if (shape === 'point') {
+    return maximum;
+  }
+  const capacity = Math.max(1, Math.floor(particleCapacity));
+  let low = 1;
+  let high = maximum;
+  let result = 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (countSeedPositions(shape, middle) <= capacity) {
+      result = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return result;
+}
+
 function appendShellX(
   positions: Int3[],
   innerSq: number,
@@ -169,11 +227,36 @@ function appendShellX(
   const maxX = Math.floor(Math.sqrt(outerRemainder));
   const innerRemainder = innerSq - yzDistanceSq;
   const minAbsX = innerRemainder > 0 ? Math.ceil(Math.sqrt(innerRemainder)) : 0;
-  for (let x = -maxX; x <= maxX; x += 1) {
-    if (Math.abs(x) >= minAbsX) {
+  if (minAbsX === 0) {
+    for (let x = -maxX; x <= maxX; x += 1) {
       positions.push({ x, y, z });
     }
+    return;
   }
+  for (let x = -maxX; x <= -minAbsX; x += 1) {
+    positions.push({ x, y, z });
+  }
+  for (let x = minAbsX; x <= maxX; x += 1) {
+    positions.push({ x, y, z });
+  }
+}
+
+function shellXCount(innerSq: number, outerSq: number, yzDistanceSq: number): number {
+  const outerRemainder = outerSq - yzDistanceSq;
+  if (outerRemainder < 0) {
+    return 0;
+  }
+  const maxX = Math.floor(Math.sqrt(outerRemainder));
+  const innerRemainder = innerSq - yzDistanceSq;
+  const minAbsX = innerRemainder > 0 ? Math.ceil(Math.sqrt(innerRemainder)) : 0;
+  if (minAbsX === 0) {
+    return maxX * 2 + 1;
+  }
+  return minAbsX <= maxX ? (maxX - minAbsX + 1) * 2 : 0;
+}
+
+function normalizeSeedRadius(radius: number): number {
+  return Math.max(1, Math.floor(Number.isFinite(radius) ? radius : 1));
 }
 
 export function uniformSphereLaunch(seed: number, walkerIndex: number, radius: number): Int3 {

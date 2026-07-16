@@ -124,9 +124,10 @@
             <label class="control">
               <div class="control-row">
                 <span>Stick Neighbors</span>
-                <input id="stick-neighbors-value" class="value-input" type="number" min="1" max="26" step="1" value="1" />
+                <input id="stick-neighbors-value" class="value-input" type="number" min="1" max="26" step="1" value="1" aria-describedby="stick-neighbors-help" />
               </div>
-              <input type="range" id="stick-neighbors" min="1" max="26" step="1" value="1" />
+              <input type="range" id="stick-neighbors" min="1" max="26" step="1" value="1" aria-describedby="stick-neighbors-help" />
+              <span id="stick-neighbors-help" class="control-help">Preferred occupied neighbors; growth uses the densest available candidates while bootstrapping.</span>
             </label>
 
             <label class="control">

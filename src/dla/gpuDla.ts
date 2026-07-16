@@ -1,9 +1,9 @@
 import type { DlaSettings, DlaSnapshot, Int3 } from '../types';
-import { HASH_COORD_MAX, HASH_COORD_MIN, generateSeedPositions, nextPowerOfTwo } from './cpu';
+import { HASH_COORD_MAX, HASH_COORD_MIN, countSeedPositions, generateSeedPositions, nextPowerOfTwo } from './cpu';
 
 const WORKGROUP_SIZE = 128;
 const PARAM_WORDS = 32;
-const COUNTER_WORDS = 8;
+const COUNTER_WORDS = 10;
 const HASH_ENTRY_BYTES = 16;
 const WALKER_BYTES = 16;
 const CANDIDATE_BYTES = 32;
@@ -17,6 +17,10 @@ const DEFAULT_WALKER_RESERVE = 131_072;
 const MAX_HASH_PROBES = 256;
 const MAX_EPOCHS_PER_STEP = 12;
 const HASH_SLOTS_PER_PARTICLE = 8;
+const MIN_HASH_CAPACITY = 64;
+const HASH_TARGET_LOAD_FACTOR = 0.7;
+const MAX_NEW_HASH_ENTRIES_PER_ATTACHMENT = 25;
+export const MAX_COMPACT_SEED_RADIUS = HASH_COORD_MAX - 1;
 
 export interface GpuDlaInstanceTargets {
   instanceMatrix: GPUBuffer;
@@ -29,6 +33,7 @@ export interface GpuDlaInstanceTargets {
 export interface GpuDlaLimits {
   maxParticles: number;
   maxWalkers: number;
+  maxSeedRadius: number;
   maxStorageBufferBindingSize: number;
   maxBufferSize: number;
 }
@@ -48,6 +53,7 @@ export interface DlaStatus {
   overflowed: boolean;
   hashEntries: number;
   hashLoadFactor: number;
+  newestVisibleBirth: number;
 }
 
 export interface DlaStepResult extends DlaStatus {
@@ -59,6 +65,35 @@ export interface GpuDlaSnapshot extends DlaSnapshot {
   walkerCount: number;
   epoch: number;
   epochCredit: number;
+}
+
+/** Initial compact hash size. The live table grows independently of the final particle target. */
+export function initialSparseHashCapacity(activeParticles: number, maximumCapacity: number): number {
+  const maximum = highestPowerOfTwo(Math.max(1, Math.floor(maximumCapacity)));
+  const desired = nextPowerOfTwo(
+    Math.max(MIN_HASH_CAPACITY, Math.max(1, Math.floor(activeParticles)) * HASH_SLOTS_PER_PARTICLE),
+  );
+  if (desired > maximum) {
+    throw new Error(`The active aggregate needs a ${desired}-entry sparse hash, above the device limit of ${maximum}.`);
+  }
+  return desired;
+}
+
+/** Plans enough headroom for a bounded growth update without shrinking an existing table. */
+export function projectedSparseHashCapacity(
+  currentCapacity: number,
+  currentEntries: number,
+  projectedAttachments: number,
+  maximumCapacity: number,
+): number {
+  const maximum = highestPowerOfTwo(Math.max(1, Math.floor(maximumCapacity)));
+  const current = Math.min(maximum, nextPowerOfTwo(Math.max(MIN_HASH_CAPACITY, currentCapacity)));
+  const projectedEntries = Math.max(0, Math.floor(currentEntries))
+    + Math.max(0, Math.floor(projectedAttachments)) * MAX_NEW_HASH_ENTRIES_PER_ATTACHMENT;
+  const desired = nextPowerOfTwo(
+    Math.max(MIN_HASH_CAPACITY, Math.ceil(projectedEntries / HASH_TARGET_LOAD_FACTOR)),
+  );
+  return Math.max(current, Math.min(maximum, desired));
 }
 
 interface Buffers {
@@ -212,6 +247,7 @@ export class GpuDlaSimulator {
         1,
         Math.min(Math.floor(largestLimit / Math.max(WALKER_BYTES, CANDIDATE_BYTES)), dispatchItems),
       ),
+      maxSeedRadius: MAX_COMPACT_SEED_RADIUS,
       maxStorageBufferBindingSize: storageLimit,
       maxBufferSize: bufferLimit,
     };
@@ -221,18 +257,24 @@ export class GpuDlaSimulator {
     return this.enqueue(async () => {
       await this.pipelineReady;
       this.assertReady();
-      if (settings.seedShape !== 'point' && Math.floor(settings.seedRadius) > HASH_COORD_MAX) {
-        throw new Error(`Seed Radius cannot exceed ${HASH_COORD_MAX} on the compact WebGPU lattice.`);
+      if (settings.seedShape !== 'point' && Math.floor(settings.seedRadius) > MAX_COMPACT_SEED_RADIUS) {
+        throw new Error(`Seed Radius cannot exceed ${MAX_COMPACT_SEED_RADIUS} on the compact WebGPU lattice.`);
       }
-      this.disposeActive();
+      const particleCapacity = this.resolveParticleCapacity(settings, targets, 1);
+      const requiredSeedParticles = countSeedPositions(settings.seedShape, settings.seedRadius);
+      if (requiredSeedParticles > particleCapacity) {
+        throw new Error(
+          `The selected seed requires ${requiredSeedParticles} particles, but the renderer/device capacity is ${particleCapacity}.`,
+        );
+      }
       const seedPositions = generateSeedPositions(settings.seedShape, settings.seedRadius);
-      const particleCapacity = this.resolveParticleCapacity(settings, targets, seedPositions.length);
-      const hashCapacity = this.resolveHashCapacity(particleCapacity);
+      this.disposeActive();
+      const seedCount = seedPositions.length;
+      const hashCapacity = this.resolveHashCapacity(seedCount, particleCapacity);
       const walkerCapacity = this.resolveWalkerCapacity(settings.walkerPool);
       const renderTargets = targets ?? this.createInternalTargets(particleCapacity);
       const buffers = this.createBuffers(hashCapacity, particleCapacity, walkerCapacity);
       const normalized = normalizeSettings(settings, particleCapacity, walkerCapacity);
-      const seedCount = Math.min(seedPositions.length, particleCapacity);
       const state: ActiveState = {
         buffers,
         targets: renderTargets,
@@ -253,6 +295,7 @@ export class GpuDlaSimulator {
       this.writeParticlePositions(buffers.particles, seedPositions.slice(0, seedCount));
       await this.rebuildPrefix(state, seedCount, true);
       state.status = await this.readStatus(state);
+      state.status = await this.ensureHashHeadroom(state, 0);
       return state.status;
     });
   }
@@ -272,7 +315,7 @@ export class GpuDlaSimulator {
       this.disposeActive();
       const seedCount = Math.max(1, Math.min(snapshot.seedCount, latestCount));
       const particleCapacity = this.resolveParticleCapacity(settings, targets, latestCount);
-      const hashCapacity = this.resolveHashCapacity(particleCapacity);
+      const hashCapacity = this.resolveHashCapacity(latestCount, particleCapacity);
       const walkerCapacity = this.resolveWalkerCapacity(settings.walkerPool);
       const renderTargets = targets ?? this.createInternalTargets(particleCapacity);
       const buffers = this.createBuffers(hashCapacity, particleCapacity, walkerCapacity);
@@ -316,6 +359,7 @@ export class GpuDlaSimulator {
         state.currentCount = restoredCurrentCount;
       }
       state.status = await this.readStatus(state);
+      state.status = await this.ensureHashHeadroom(state, 0);
       return state.status;
     });
   }
@@ -329,6 +373,7 @@ export class GpuDlaSimulator {
         state.branchSerial = (state.branchSerial + 1) >>> 0;
         await this.rebuildPrefix(state, state.currentCount, true);
         state.latestCount = state.currentCount;
+        state.status = await this.readStatus(state);
       }
       if (state.latestCount >= state.settings.targetParticles) {
         const status = await this.readStatus(state);
@@ -346,6 +391,15 @@ export class GpuDlaSimulator {
         return { ...state.status, attachedThisStep: 0 };
       }
       state.epochCredit -= epochs;
+      const remainingCapacity = Math.max(
+        0,
+        Math.min(state.settings.targetParticles, state.particleCapacity) - state.latestCount,
+      );
+      const projectedAttachments = Math.min(
+        remainingCapacity,
+        epochs * Math.min(state.settings.growthBatch, state.settings.walkerPool),
+      );
+      state.status = await this.ensureHashHeadroom(state, projectedAttachments);
       state.epoch = (state.epoch + epochs) >>> 0;
       const previousCount = state.latestCount;
       this.writeParams(state, state.latestCount, 16);
@@ -359,7 +413,9 @@ export class GpuDlaSimulator {
         );
       }
       this.submitPasses(state, bindGroup, epochPasses);
-      const status = await this.readStatus(state);
+      let status = await this.readStatus(state);
+      state.status = status;
+      status = await this.ensureHashHeadroom(state, 0);
       state.latestCount = status.latestCount;
       state.currentCount = status.currentCount;
       state.status = status;
@@ -613,6 +669,7 @@ export class GpuDlaSimulator {
       overflowed: (counters[6] ?? 0) !== 0,
       hashEntries: counters[7] ?? 0,
       hashLoadFactor: (counters[7] ?? 0) / state.hashCapacity,
+      newestVisibleBirth: counters[8] ?? 0,
     };
     return status;
   }
@@ -731,13 +788,87 @@ export class GpuDlaSimulator {
     return Math.max(1, capacity);
   }
 
-  private resolveHashCapacity(particleCapacity: number): number {
-    const desired = nextPowerOfTwo(Math.max(16, particleCapacity * HASH_SLOTS_PER_PARTICLE));
-    const storageLimit = this.getLimits().maxStorageBufferBindingSize;
-    if (desired * HASH_ENTRY_BYTES > storageLimit) {
-      throw new Error('The requested particle target cannot fit a half-full sparse hash on this WebGPU device.');
+  private resolveHashCapacity(activeParticles: number, particleCapacity: number): number {
+    return initialSparseHashCapacity(activeParticles, this.getMaximumHashCapacity(particleCapacity));
+  }
+
+  private getMaximumHashCapacity(particleCapacity?: number): number {
+    const limits = this.getLimits();
+    const deviceMaximum = highestPowerOfTwo(
+      Math.floor(Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize) / HASH_ENTRY_BYTES),
+    );
+    if (particleCapacity === undefined) {
+      return deviceMaximum;
     }
-    return desired;
+    return Math.min(
+      deviceMaximum,
+      nextPowerOfTwo(Math.max(MIN_HASH_CAPACITY, particleCapacity * HASH_SLOTS_PER_PARTICLE)),
+    );
+  }
+
+  private async ensureHashHeadroom(state: ActiveState, projectedAttachments: number): Promise<DlaStatus> {
+    const maximum = this.getMaximumHashCapacity(state.particleCapacity);
+    let status = state.status;
+    let remainingProjection = Math.max(0, Math.floor(projectedAttachments));
+
+    while (state.hashCapacity < maximum) {
+      let desired = projectedSparseHashCapacity(
+        state.hashCapacity,
+        status.hashEntries,
+        remainingProjection,
+        maximum,
+      );
+      const recoverableOverflow = status.overflowed && status.hashLoadFactor >= 0.5;
+      if ((status.hashLoadFactor >= HASH_TARGET_LOAD_FACTOR || recoverableOverflow) && desired <= state.hashCapacity) {
+        desired = Math.min(maximum, state.hashCapacity * 2);
+      }
+      if (desired <= state.hashCapacity) {
+        break;
+      }
+
+      await this.resizeHash(state, desired);
+      status = await this.readStatus(state);
+      state.status = status;
+      remainingProjection = 0;
+    }
+    return status;
+  }
+
+  private async resizeHash(state: ActiveState, requestedCapacity: number): Promise<void> {
+    const nextCapacity = Math.min(
+      this.getMaximumHashCapacity(state.particleCapacity),
+      nextPowerOfTwo(Math.max(state.hashCapacity + 1, Math.floor(requestedCapacity))),
+    );
+    if (nextCapacity <= state.hashCapacity) {
+      return;
+    }
+
+    const previousHash = state.buffers.hash;
+    const previousCapacity = state.hashCapacity;
+    const previousCurrentCount = state.currentCount;
+    const previousLatestCount = state.latestCount;
+    const nextHash = this.createBuffer(
+      nextCapacity * HASH_ENTRY_BYTES,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    );
+    state.buffers.hash = nextHash;
+    state.hashCapacity = nextCapacity;
+    try {
+      await this.rebuildPrefix(state, previousLatestCount, false);
+      if (previousCurrentCount < previousLatestCount) {
+        await this.compactPrefix(state, previousCurrentCount);
+        state.currentCount = previousCurrentCount;
+        state.latestCount = previousLatestCount;
+      }
+      previousHash.destroy();
+    } catch (error) {
+      state.buffers.hash = previousHash;
+      state.hashCapacity = previousCapacity;
+      state.currentCount = previousCurrentCount;
+      state.latestCount = previousLatestCount;
+      nextHash.destroy();
+      throw error;
+    }
   }
 
   private resolveWalkerCapacity(requested: number): number {
@@ -856,6 +987,7 @@ function emptyStatus(seedCount: number, hashCapacity: number, particleCapacity: 
     overflowed: false,
     hashEntries: seedCount,
     hashLoadFactor: seedCount / hashCapacity,
+    newestVisibleBirth: Math.max(0, seedCount - 1),
   };
 }
 
@@ -936,6 +1068,8 @@ struct Counters {
   attachedThisStep: atomic<u32>,
   overflow: atomic<u32>,
   hashEntries: atomic<u32>,
+  newestVisibleBirth: atomic<u32>,
+  maxCandidateNeighbors: atomic<u32>,
 };
 
 struct Params {
@@ -1176,6 +1310,19 @@ fn addVisible(birth: u32) {
   particles[birth].slot = slot;
   instanceMatrices[slot] = makeMatrix(particles[birth].position.xyz);
   instanceBirths[slot] = vec4<f32>(f32(birth), 0.0, 0.0, 0.0);
+  atomicMax(&counters.newestVisibleBirth, birth);
+}
+
+fn refreshNewestVisible(upperExclusive: u32) {
+  var candidate = upperExclusive;
+  while (candidate > 0u) {
+    candidate = candidate - 1u;
+    if (particles[candidate].slot != INVALID) {
+      atomicStore(&counters.newestVisibleBirth, candidate);
+      return;
+    }
+  }
+  atomicStore(&counters.newestVisibleBirth, 0u);
 }
 
 fn removeVisible(birth: u32) {
@@ -1193,6 +1340,9 @@ fn removeVisible(birth: u32) {
   }
   particles[birth].slot = INVALID;
   atomicStore(&counters.visibleCount, last);
+  if (atomicLoad(&counters.newestVisibleBirth) == birth) {
+    refreshNewestVisible(birth);
+  }
 }
 
 fn xorshift(value: u32) -> u32 {
@@ -1235,6 +1385,8 @@ fn clearHash(@builtin(global_invocation_id) id: vec3<u32>) {
     atomicStore(&counters.attachedThisStep, 0u);
     atomicStore(&counters.overflow, 0u);
     atomicStore(&counters.hashEntries, 0u);
+    atomicStore(&counters.newestVisibleBirth, 0u);
+    atomicStore(&counters.maxCandidateNeighbors, 0u);
   }
 }
 
@@ -1290,6 +1442,7 @@ fn buildFrontier(@builtin(global_invocation_id) id: vec3<u32>) {
 @compute @workgroup_size(1)
 fn beginCompact() {
   atomicStore(&counters.visibleCount, 0u);
+  atomicStore(&counters.newestVisibleBirth, 0u);
   indirectArgs[0] = params.vertexCount;
   indirectArgs[1] = 0u;
   indirectArgs[2] = 0u;
@@ -1315,6 +1468,7 @@ fn compactPrefix(@builtin(global_invocation_id) id: vec3<u32>) {
   particles[birth].slot = slot;
   instanceMatrices[slot] = makeMatrix(particles[birth].position.xyz);
   instanceBirths[slot] = vec4<f32>(f32(birth), 0.0, 0.0, 0.0);
+  atomicMax(&counters.newestVisibleBirth, birth);
 }
 
 @compute @workgroup_size(1)
@@ -1340,6 +1494,7 @@ fn clearCandidates() {
   atomicStore(&counters.candidateCount, 0u);
   atomicStore(&counters.attachedThisStep, 0u);
   atomicStore(&counters.epoch, params.epoch);
+  atomicStore(&counters.maxCandidateNeighbors, 0u);
 }
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
@@ -1374,9 +1529,6 @@ fn advanceWalkers(@builtin(global_invocation_id) id: vec3<u32>) {
       continue;
     }
     let count = packedCount(entryNeighbors(frontierSlot), params.neighborhood);
-    if (count < params.stickNeighbors) {
-      continue;
-    }
     let roll = u32(randomFloat(&rng) * 1000000.0);
     if (roll >= params.stickChance) {
       continue;
@@ -1386,6 +1538,7 @@ fn advanceWalkers(@builtin(global_invocation_id) id: vec3<u32>) {
     candidates[walkerIndex].neighborCount = count;
     candidates[walkerIndex].rank = walkerIndex;
     atomicAdd(&counters.candidateCount, 1u);
+    atomicMax(&counters.maxCandidateNeighbors, count);
     position = launchPosition(&rng);
     break;
   }
@@ -1397,8 +1550,13 @@ fn commitCandidates() {
   var particleCount = atomicLoad(&counters.particleCount);
   var attached = 0u;
   let limit = min(params.growthBatch, params.targetParticles - min(params.targetParticles, particleCount));
+  let attainable = atomicLoad(&counters.maxCandidateNeighbors);
+  let effectiveStickNeighbors = max(1u, min(params.stickNeighbors, attainable));
   for (var walkerIndex = 0u; walkerIndex < params.walkerCount && attached < limit; walkerIndex = walkerIndex + 1u) {
     if (candidates[walkerIndex].valid == 0u || particleCount >= params.particleCapacity) {
+      continue;
+    }
+    if (candidates[walkerIndex].neighborCount < effectiveStickNeighbors) {
       continue;
     }
     let position = candidates[walkerIndex].position.xyz;

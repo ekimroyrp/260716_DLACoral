@@ -24,17 +24,20 @@ import { add, attribute, clamp, max, mix, pass, uniform } from 'three/tsl';
 import {
   DEFAULT_DISPLAY_SETTINGS,
   DEFAULT_DLA_SETTINGS,
+  type AttachmentNeighborhood,
   type DisplaySettings,
   type DlaSettings,
 } from '../types';
 import { createGlbBlob, createObjBlob, type ExportInstanceData } from './modelExport';
-import { selectPreferredRequiredLimits } from './webGpuLimits';
+import { createDisplayColor, setDisplayColor } from './displayColor';
+import { disableWebGlFallback } from './nativeWebGpu';
+import { createRequiredDeviceLimits } from './webGpuLimits';
 
 const DEG_TO_RAD = Math.PI / 180;
 const MODEL_ROTATION_DEGREES_PER_PIXEL = 0.35;
 const KEY_LIGHT_DISTANCE_SCALE = 2.69284236449147;
-const CAMERA_DISTANCE_SCALE = 1.5;
-const CAMERA_GROWTH_REFRAME_RATIO = 1.35;
+const INITIAL_CAMERA_EXTENT = 24;
+const INITIAL_CAMERA_DISTANCE_SCALE = 1.5;
 const MAX_PIXEL_RATIO = 2;
 
 export type RotationPhase = 'begin' | 'change' | 'end';
@@ -56,6 +59,7 @@ export interface DlaRenderState {
   displayedCount: number;
   totalCount: number;
   seedCount: number;
+  newestVisibleBirth: number;
   maxRadiusSq: number;
 }
 
@@ -67,8 +71,9 @@ export interface CpuInstanceData {
 
 export type InstanceDataProvider = (count: number) => Promise<CpuInstanceData>;
 
-interface SphereGeometryData {
+export interface SphereGeometryData {
   geometry: BufferGeometry;
+  rawPositions: Float32Array;
   basePositions: Float32Array;
 }
 
@@ -95,20 +100,22 @@ export class DlaRenderer {
   private readonly renderPipeline: RenderPipeline;
   private readonly bloomPass: ReturnType<typeof bloom>;
   private readonly indirect: IndirectStorageBufferAttribute;
-  private readonly requiredDeviceLimits: Record<string, number> = {};
-  private readonly innerColorUniform = uniform(new Color(DEFAULT_DISPLAY_SETTINGS.innerColor));
-  private readonly outerColorUniform = uniform(new Color(DEFAULT_DISPLAY_SETTINGS.outerColor));
+  private readonly requiredDeviceLimits = createRequiredDeviceLimits();
+  private readonly innerColorUniform = uniform(createDisplayColor(DEFAULT_DISPLAY_SETTINGS.innerColor));
+  private readonly outerColorUniform = uniform(createDisplayColor(DEFAULT_DISPLAY_SETTINGS.outerColor));
   private readonly gradientCountUniform = uniform(1);
   private readonly seedCountUniform = uniform(1);
   private readonly brightnessUniform = uniform(DEFAULT_DISPLAY_SETTINGS.brightness);
   private readonly contrastUniform = uniform(DEFAULT_DISPLAY_SETTINGS.contrast);
   private geometry: BufferGeometry;
+  private rawPositions: Float32Array;
   private basePositions: Float32Array;
   private birthAttribute: StorageInstancedBufferAttribute;
   private mesh: InstancedMesh;
   private targets: DlaRenderTargets | null = null;
   private instanceCapacity = 1;
   private sphereDetail = 0;
+  private currentNeighborhood: AttachmentNeighborhood = 26;
   private currentSphereGap = 0;
   private currentRotation = 0;
   private displayedCount = 0;
@@ -116,8 +123,8 @@ export class DlaRenderer {
   private lastTotalCount = 0;
   private lastShadowParticleCount = 0;
   private lastShadowRefreshTime = 0;
-  private framedExtent = 0;
-  private cameraUserAdjusted = false;
+  private lastMaxRadiusSq = 0;
+  private currentExtent = INITIAL_CAMERA_EXTENT;
   private currentDla: DlaSettings = { ...DEFAULT_DLA_SETTINGS };
   private currentDisplay: DisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS };
   private modelRotationPointerId: number | null = null;
@@ -136,7 +143,11 @@ export class DlaRenderer {
     this.scene.background = new Color(0x000000);
 
     this.camera = new PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.01, 5000);
-    this.camera.position.set(177, 144, 228);
+    this.camera.position.set(
+      INITIAL_CAMERA_EXTENT * 0.92 * INITIAL_CAMERA_DISTANCE_SCALE,
+      INITIAL_CAMERA_EXTENT * 0.72 * INITIAL_CAMERA_DISTANCE_SCALE,
+      INITIAL_CAMERA_EXTENT * 1.18 * INITIAL_CAMERA_DISTANCE_SCALE,
+    );
 
     this.renderer = new WebGPURenderer({
       canvas,
@@ -146,6 +157,7 @@ export class DlaRenderer {
       powerPreference: 'high-performance',
       requiredLimits: this.requiredDeviceLimits,
     });
+    disableWebGlFallback(this.renderer);
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = DEFAULT_DISPLAY_SETTINGS.exposure;
@@ -155,8 +167,9 @@ export class DlaRenderer {
     this.renderer.setPixelRatio(this.getPixelRatio());
     this.renderer.setSize(window.innerWidth, window.innerHeight);
 
-    const sphere = createSphereGeometry(this.sphereDetail);
+    const sphere = createSphereGeometry(this.sphereDetail, this.currentDla.attachmentNeighborhood);
     this.geometry = sphere.geometry;
+    this.rawPositions = sphere.rawPositions;
     this.basePositions = sphere.basePositions;
     this.indirect = new IndirectStorageBufferAttribute(
       new Uint32Array([this.getSphereVertexCount(), 0, 0, 0]),
@@ -234,7 +247,8 @@ export class DlaRenderer {
       MIDDLE: MOUSE.PAN,
       RIGHT: MOUSE.ROTATE,
     };
-    this.controls.addEventListener('start', this.handleControlsStart);
+    this.controls.target.set(0, INITIAL_CAMERA_EXTENT * 0.12, 0);
+    this.controls.update();
 
     this.canvas.addEventListener('contextmenu', this.handleContextMenu);
     this.canvas.addEventListener('pointerdown', this.handleModelRotationPointerDown);
@@ -250,8 +264,15 @@ export class DlaRenderer {
     if (this.initialized) {
       return;
     }
-    await this.configureRequiredDeviceLimits();
-    await this.renderer.init();
+    try {
+      await this.renderer.init();
+    } catch (error) {
+      const reason = normalizeError(error);
+      throw new Error(
+        `Native WebGPU is required to run 260716_DLAFractals. ${reason.message}`,
+        { cause: reason },
+      );
+    }
     const backend = this.getWebGpuBackend();
     if (backend.isWebGPUBackend !== true || !backend.device) {
       throw new Error('Native WebGPU is required to run 260716_DLAFractals.');
@@ -326,8 +347,10 @@ export class DlaRenderer {
 
   updateDlaSettings(settings: DlaSettings): void {
     this.assertNotDisposed();
+    const sphereScaleChanged = settings.sphereScale !== this.currentDla.sphereScale;
     const renderSettingsChanged =
       settings.sphereDetail !== this.currentDla.sphereDetail
+      || settings.attachmentNeighborhood !== this.currentDla.attachmentNeighborhood
       || settings.sphereGap !== this.currentDla.sphereGap
       || settings.sphereScale !== this.currentDla.sphereScale
       || settings.rotation !== this.currentDla.rotation;
@@ -336,9 +359,16 @@ export class DlaRenderer {
       return;
     }
     this.setSphereDetail(settings.sphereDetail);
+    this.setSphereNeighborhood(settings.attachmentNeighborhood);
     this.setSphereGap(settings.sphereGap);
     this.mesh.scale.setScalar(Math.max(0.01, settings.sphereScale));
     this.setModelRotation(settings.rotation);
+    if (sphereScaleChanged) {
+      const extent = extentFromRadius(this.lastMaxRadiusSq, settings.sphereScale);
+      this.currentExtent = extent;
+      this.updateLightRig(extent, this.currentDisplay);
+    }
+    this.keyLight.shadow.needsUpdate = true;
   }
 
   updateDisplay(settings: DisplaySettings): void {
@@ -347,8 +377,8 @@ export class DlaRenderer {
       return;
     }
     this.currentDisplay = { ...settings };
-    this.innerColorUniform.value.set(settings.innerColor);
-    this.outerColorUniform.value.set(settings.outerColor);
+    setDisplayColor(this.innerColorUniform.value, settings.innerColor);
+    setDisplayColor(this.outerColorUniform.value, settings.outerColor);
     this.brightnessUniform.value = Math.max(0, settings.brightness);
     this.contrastUniform.value = Math.max(0, settings.contrast);
     this.renderer.toneMappingExposure = Math.max(0, settings.exposure);
@@ -372,7 +402,16 @@ export class DlaRenderer {
     this.displayedCount = clampInteger(state.displayedCount, 0, maxCount);
     const totalCount = Math.max(0, Math.floor(state.totalCount));
     this.seedCount = clampInteger(state.seedCount, 0, totalCount);
-    this.gradientCountUniform.value = Math.max(1, totalCount);
+    const newestVisibleBirth = clampInteger(
+      state.newestVisibleBirth,
+      0,
+      Math.max(0, totalCount - 1),
+    );
+    this.gradientCountUniform.value = Math.max(
+      1,
+      this.seedCount,
+      newestVisibleBirth + 1,
+    );
     this.seedCountUniform.value = this.seedCount;
 
     if (this.targets) {
@@ -386,16 +425,11 @@ export class DlaRenderer {
     const wasReset = state.totalCount < this.lastTotalCount;
     const aggregateChanged = state.totalCount !== this.lastTotalCount;
     this.lastTotalCount = totalCount;
-    if (wasReset) {
-      this.cameraUserAdjusted = false;
-      this.framedExtent = 0;
-    }
+    this.lastMaxRadiusSq = Math.max(0, state.maxRadiusSq);
 
     const extent = extentFromRadius(state.maxRadiusSq, this.currentDla.sphereScale);
+    this.currentExtent = extent;
     this.updateLightRig(extent, this.currentDisplay);
-    if (this.framedExtent === 0 || wasReset || (!this.cameraUserAdjusted && extent > this.framedExtent * CAMERA_GROWTH_REFRAME_RATIO)) {
-      this.frameCamera(state.maxRadiusSq, true);
-    }
     if (aggregateChanged) {
       this.requestAdaptiveShadowRefresh(totalCount, wasReset);
     }
@@ -404,29 +438,7 @@ export class DlaRenderer {
   setModelRotation(degrees: number): void {
     this.currentRotation = normalizeRotationDegrees(degrees);
     this.mesh.rotation.y = this.currentRotation * DEG_TO_RAD;
-  }
-
-  frameCamera(maxRadiusSq: number, force = false): void {
-    if (!force && this.cameraUserAdjusted) {
-      return;
-    }
-    const extent = extentFromRadius(maxRadiusSq, this.currentDla.sphereScale);
-    if (!force && this.framedExtent > 0 && extent <= this.framedExtent * CAMERA_GROWTH_REFRAME_RATIO) {
-      return;
-    }
-
-    this.updateLightRig(extent, this.currentDisplay);
-    this.controls.target.set(0, extent * 0.12, 0);
-    this.camera.position.set(
-      extent * 0.92 * CAMERA_DISTANCE_SCALE,
-      extent * 0.72 * CAMERA_DISTANCE_SCALE,
-      extent * 1.18 * CAMERA_DISTANCE_SCALE,
-    );
-    this.camera.near = Math.max(0.01, extent / 800);
-    this.camera.far = extent * 24;
-    this.camera.updateProjectionMatrix();
-    this.controls.update();
-    this.framedExtent = extent;
+    this.keyLight.shadow.needsUpdate = true;
   }
 
   setInstanceDataProvider(provider: InstanceDataProvider | null): void {
@@ -452,7 +464,11 @@ export class DlaRenderer {
       birthRanks: instanceData.birthRanks.slice(0, exportCount),
       count: exportCount,
       seedCount: this.seedCount,
-      gradientCount: Math.max(exportCount, this.lastTotalCount),
+      gradientCount: displayedGradientCount(
+        instanceData.birthRanks,
+        exportCount,
+        this.seedCount,
+      ),
       spherePositions: new Float32Array(positions),
       sphereNormals: new Float32Array(normals),
       sphereScale: this.mesh.scale.x,
@@ -520,7 +536,6 @@ export class DlaRenderer {
     }
     this.disposed = true;
     this.renderer.setAnimationLoop(null);
-    this.controls.removeEventListener('start', this.handleControlsStart);
     this.controls.dispose();
     this.canvas.removeEventListener('contextmenu', this.handleContextMenu);
     this.canvas.removeEventListener('pointerdown', this.handleModelRotationPointerDown);
@@ -545,10 +560,6 @@ export class DlaRenderer {
 
   private readonly handleContextMenu = (event: Event): void => {
     event.preventDefault();
-  };
-
-  private readonly handleControlsStart = (): void => {
-    this.cameraUserAdjusted = true;
   };
 
   private readonly handleModelRotationPointerDown = (event: PointerEvent): void => {
@@ -595,10 +606,12 @@ export class DlaRenderer {
     }
 
     const previousGeometry = this.geometry;
-    const sphere = createSphereGeometry(safeDetail);
+    const sphere = createSphereGeometry(safeDetail, this.currentDla.attachmentNeighborhood);
     this.geometry = sphere.geometry;
+    this.rawPositions = sphere.rawPositions;
     this.basePositions = sphere.basePositions;
     this.sphereDetail = safeDetail;
+    this.currentNeighborhood = this.currentDla.attachmentNeighborhood;
     this.geometry.setAttribute('instanceBirth', this.birthAttribute);
     this.geometry.setIndirect(this.indirect);
     this.mesh.geometry = this.geometry;
@@ -618,20 +631,22 @@ export class DlaRenderer {
     this.keyLight.shadow.needsUpdate = true;
   }
 
+  private setSphereNeighborhood(neighborhood: AttachmentNeighborhood): void {
+    if (neighborhood === this.currentNeighborhood) {
+      return;
+    }
+    this.basePositions = calibrateSphereForNeighborhood(this.rawPositions, neighborhood);
+    this.currentNeighborhood = neighborhood;
+    this.currentSphereGap = Number.NaN;
+    this.setSphereGap(this.currentDla.sphereGap);
+  }
+
   private setSphereGap(gap: number): void {
     const safeGap = Math.max(0, gap);
     if (Math.abs(safeGap - this.currentSphereGap) <= 0.0001) {
       return;
     }
-    const radiusScale = Math.max(0.01, 1 - safeGap);
-    const positions = this.geometry.getAttribute('position');
-    const array = positions.array as Float32Array;
-    for (let i = 0; i < array.length; i++) {
-      array[i] = this.basePositions[i] * radiusScale;
-    }
-    positions.needsUpdate = true;
-    this.geometry.computeBoundingBox();
-    this.geometry.computeBoundingSphere();
+    applySphereGapToGeometry(this.geometry, this.basePositions, safeGap);
     this.currentSphereGap = safeGap;
     this.keyLight.shadow.needsUpdate = true;
   }
@@ -704,7 +719,7 @@ export class DlaRenderer {
   }
 
   private getCurrentExtent(): number {
-    return this.framedExtent > 0 ? this.framedExtent : 24;
+    return this.currentExtent;
   }
 
   private getSphereVertexCount(): number {
@@ -771,38 +786,19 @@ export class DlaRenderer {
     const encoder = device.createCommandEncoder();
     encoder.copyBufferToBuffer(source, 0, readBuffer, 0, byteLength);
     device.queue.submit([encoder.finish()]);
-    await readBuffer.mapAsync(GPUMapMode.READ, 0, bufferSize);
-    const data = readBuffer.getMappedRange(0, byteLength).slice(0);
-    readBuffer.unmap();
-    readBuffer.destroy();
-    return data;
+    try {
+      await readBuffer.mapAsync(GPUMapMode.READ, 0, bufferSize);
+      return readBuffer.getMappedRange(0, byteLength).slice(0);
+    } finally {
+      if (readBuffer.mapState === 'mapped') {
+        readBuffer.unmap();
+      }
+      readBuffer.destroy();
+    }
   }
 
   private getPixelRatio(): number {
     return Math.min(window.devicePixelRatio * 1.15, MAX_PIXEL_RATIO);
-  }
-
-  private async configureRequiredDeviceLimits(): Promise<void> {
-    if (typeof navigator === 'undefined' || !navigator.gpu) {
-      return;
-    }
-
-    try {
-      const adapter = await navigator.gpu.requestAdapter({
-        powerPreference: 'high-performance',
-        featureLevel: 'compatibility',
-        xrCompatible: false,
-      });
-      if (!adapter) {
-        return;
-      }
-      Object.assign(
-        this.requiredDeviceLimits,
-        selectPreferredRequiredLimits(adapter.limits),
-      );
-    } catch {
-      // Let Three's native initialization report the authoritative error.
-    }
   }
 
   private assertReady(): void {
@@ -819,14 +815,22 @@ export class DlaRenderer {
   }
 }
 
-function createSphereGeometry(detail: number): SphereGeometryData {
-  const source = new IcosahedronGeometry(0.5, clampInteger(detail, 0, 2));
+export function createSphereGeometry(
+  detail: number,
+  neighborhood: AttachmentNeighborhood = 26,
+): SphereGeometryData {
+  const subdivisions = [0, 1, 3][clampInteger(detail, 0, 2)] ?? 0;
+  const source = new IcosahedronGeometry(0.5, subdivisions);
   const geometry = source.index ? source.toNonIndexed() : source;
   if (geometry !== source) {
     source.dispose();
   }
 
   const positions = geometry.getAttribute('position');
+  const rawPositions = new Float32Array(positions.array);
+  const basePositions = calibrateSphereForNeighborhood(rawPositions, neighborhood);
+  (positions.array as Float32Array).set(basePositions);
+  positions.needsUpdate = true;
   const normals = new Float32Array(positions.count * 3);
   const normal = new Float32Array(3);
   for (let i = 0; i < positions.count; i++) {
@@ -843,8 +847,80 @@ function createSphereGeometry(detail: number): SphereGeometryData {
   geometry.computeBoundingSphere();
   return {
     geometry,
-    basePositions: new Float32Array(positions.array),
+    rawPositions,
+    basePositions,
   };
+}
+
+export function applySphereGapToGeometry(
+  geometry: BufferGeometry,
+  zeroGapPositions: Float32Array,
+  gap: number,
+): void {
+  const positions = geometry.getAttribute('position');
+  const array = positions.array as Float32Array;
+  if (zeroGapPositions.length !== array.length) {
+    throw new Error('Sphere gap geometry does not match its calibrated zero-gap positions.');
+  }
+  const radiusScale = Math.max(0.01, 1 - Math.max(0, gap));
+  for (let index = 0; index < array.length; index += 1) {
+    array[index] = zeroGapPositions[index] * radiusScale;
+  }
+  positions.needsUpdate = true;
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+}
+
+function calibrateSphereForNeighborhood(
+  rawPositions: Float32Array,
+  neighborhood: AttachmentNeighborhood,
+): Float32Array {
+  let calibrationScale = 1;
+  for (const [offsetX, offsetY, offsetZ] of latticeOffsets(neighborhood)) {
+    const distance = Math.hypot(offsetX, offsetY, offsetZ);
+    const directionX = offsetX / distance;
+    const directionY = offsetY / distance;
+    const directionZ = offsetZ / distance;
+    let support = 0;
+    for (let index = 0; index < rawPositions.length; index += 3) {
+      support = Math.max(
+        support,
+        rawPositions[index] * directionX
+          + rawPositions[index + 1] * directionY
+          + rawPositions[index + 2] * directionZ,
+      );
+    }
+    if (support > 0) {
+      calibrationScale = Math.max(calibrationScale, distance / (2 * support));
+    }
+  }
+  const calibrated = new Float32Array(rawPositions.length);
+  for (let index = 0; index < rawPositions.length; index += 1) {
+    calibrated[index] = rawPositions[index] * calibrationScale;
+  }
+  return calibrated;
+}
+
+function latticeOffsets(neighborhood: AttachmentNeighborhood): Array<[number, number, number]> {
+  const offsets: Array<[number, number, number]> = [];
+  for (let z = -1; z <= 1; z += 1) {
+    for (let y = -1; y <= 1; y += 1) {
+      for (let x = -1; x <= 1; x += 1) {
+        const nonzeroAxes = Number(x !== 0) + Number(y !== 0) + Number(z !== 0);
+        if (nonzeroAxes === 0) {
+          continue;
+        }
+        if (neighborhood === 6 && nonzeroAxes !== 1) {
+          continue;
+        }
+        if (neighborhood === 18 && nonzeroAxes === 3) {
+          continue;
+        }
+        offsets.push([x, y, z]);
+      }
+    }
+  }
+  return offsets;
 }
 
 function extentFromRadius(maxRadiusSq: number, sphereScale: number): number {
@@ -893,6 +969,22 @@ function alignedSize(size: number): number {
 
 function normalizeError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+export function displayedGradientCount(
+  birthRanks: Float32Array,
+  count: number,
+  seedCount: number,
+): number {
+  const safeCount = Math.min(Math.max(0, Math.floor(count)), birthRanks.length);
+  let newestVisibleBirth = Math.max(0, Math.floor(seedCount) - 1);
+  for (let index = 0; index < safeCount; index += 1) {
+    const birth = birthRanks[index];
+    if (Number.isFinite(birth)) {
+      newestVisibleBirth = Math.max(newestVisibleBirth, Math.floor(birth));
+    }
+  }
+  return Math.max(1, Math.floor(seedCount), newestVisibleBirth + 1);
 }
 
 function downloadBlob(blob: Blob, filename: string): void {
