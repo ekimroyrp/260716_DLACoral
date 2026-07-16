@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23000000'/%3E%3Cg fill='%23f4e6d2'%3E%3Ccircle cx='16' cy='16' r='3'/%3E%3Ccircle cx='11' cy='14' r='2.5'/%3E%3Ccircle cx='20' cy='11' r='2.3'/%3E%3Ccircle cx='21' cy='19' r='2.7'/%3E%3Ccircle cx='13' cy='21' r='2.2'/%3E%3Ccircle cx='8' cy='10' r='1.8'/%3E%3Ccircle cx='25' cy='8' r='1.6'/%3E%3Ccircle cx='26' cy='23' r='1.8'/%3E%3Ccircle cx='8' cy='25' r='1.6'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='2' fill='%236b2f24'/%3E%3C/svg%3E" />
+    <title>260716_DLAFractals</title>
+    <style>
+      #ui-panel {
+        visibility: hidden;
+        opacity: 0;
+      }
+
+      html.ui-ready #ui-panel {
+        visibility: visible;
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="app-canvas"></canvas>
+
+    <aside id="ui-panel" class="apple-panel" aria-label="DLA controls">
+      <div id="ui-handle" class="panel-drag-handle">
+        <button
+          type="button"
+          id="collapse-toggle"
+          class="collapse-button panel-collapse-toggle"
+          aria-label="Collapse controls"
+          aria-expanded="true"
+        >
+          <span class="collapse-icon" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div class="ui-body panel-sections">
+        <div class="control-hint">Wheel = Zoom, MMB = Pan, RMB = Orbit, LMB = Rotate Model</div>
+
+        <section class="panel-section">
+          <div class="panel-section-header">
+            <span class="panel-section-label">Simulation</span>
+          </div>
+          <div class="panel-section-content panel-controls-stack">
+            <div class="control control-grid-2">
+              <button type="button" id="start-sim" class="pill-button control-button-wide">Start</button>
+              <button type="button" id="reset-sim" class="pill-button control-button-wide">Reset</button>
+            </div>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Simulation Timeline</span>
+                <input id="simulation-timeline-value" class="value-input" type="number" min="0" max="0" step="1" value="0" />
+              </div>
+              <input type="range" id="simulation-timeline" min="0" max="0" step="1" value="0" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Simulation Rate</span>
+                <input id="simulation-rate-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="1.00" />
+              </div>
+              <input type="range" id="simulation-rate" min="0.1" max="3" step="0.01" value="1" />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <div class="panel-section-header">
+            <span class="panel-section-label">Diffusion-Limited Aggregation</span>
+          </div>
+          <div class="panel-section-content panel-controls-stack">
+            <div id="particle-count-note" class="control-hint">Particles = 1 / 1,000,000</div>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Seed</span>
+                <input id="seed-value" class="value-input" type="number" min="1" max="999999" step="1" value="260716" />
+              </div>
+              <input type="range" id="seed" min="1" max="999999" step="1" value="260716" />
+            </label>
+
+            <label class="control">
+              <div class="control-row"><span>Seed Shape</span></div>
+              <span class="select-shell select-control" data-select="seed-shape">
+                <select id="seed-shape" class="native-select-hidden">
+                  <option value="point" selected>Point</option>
+                  <option value="sphere">Sphere</option>
+                  <option value="ring">Ring</option>
+                </select>
+                <button type="button" id="seed-shape-trigger" class="select-trigger">Point</button>
+                <ul id="seed-shape-menu" class="select-menu" hidden></ul>
+              </span>
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Seed Radius</span>
+                <input id="seed-radius-value" class="value-input" type="number" min="1" max="64" step="1" value="8" />
+              </div>
+              <input type="range" id="seed-radius" min="1" max="64" step="1" value="8" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Target Particles</span>
+                <input id="target-particles-value" class="value-input" type="number" min="1000" max="1000000" step="1000" value="1000000" />
+              </div>
+              <input type="range" id="target-particles" min="1000" max="1000000" step="1000" value="1000000" />
+            </label>
+
+            <label class="control">
+              <div class="control-row"><span>Attachment Neighborhood</span></div>
+              <span class="select-shell select-control" data-select="attachment-neighborhood">
+                <select id="attachment-neighborhood" class="native-select-hidden">
+                  <option value="6">Faces 6</option>
+                  <option value="18">Faces + Edges 18</option>
+                  <option value="26" selected>Full 26</option>
+                </select>
+                <button type="button" id="attachment-neighborhood-trigger" class="select-trigger">Full 26</button>
+                <ul id="attachment-neighborhood-menu" class="select-menu" hidden></ul>
+              </span>
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Stick Neighbors</span>
+                <input id="stick-neighbors-value" class="value-input" type="number" min="1" max="26" step="1" value="1" />
+              </div>
+              <input type="range" id="stick-neighbors" min="1" max="26" step="1" value="1" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Stick Chance</span>
+                <input id="stick-chance-value" class="value-input" type="number" min="0.01" max="1" step="0.01" value="1.00" />
+              </div>
+              <input type="range" id="stick-chance" min="0.01" max="1" step="0.01" value="1" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Launch Padding</span>
+                <input id="launch-padding-value" class="value-input" type="number" min="1" max="32" step="1" value="3" />
+              </div>
+              <input type="range" id="launch-padding" min="1" max="32" step="1" value="3" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Kill Padding</span>
+                <input id="kill-padding-value" class="value-input" type="number" min="1" max="64" step="1" value="3" />
+              </div>
+              <input type="range" id="kill-padding" min="1" max="64" step="1" value="3" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Growth Batch</span>
+                <input id="growth-batch-value" class="value-input" type="number" min="1" max="4096" step="1" value="256" />
+              </div>
+              <input type="range" id="growth-batch" min="1" max="4096" step="1" value="256" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Walker Pool</span>
+                <input id="walker-pool-value" class="value-input" type="number" min="1024" max="131072" step="1024" value="65536" />
+              </div>
+              <input type="range" id="walker-pool" min="1024" max="131072" step="1024" value="65536" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Rotation</span>
+                <input id="rotation-value" class="value-input" type="number" min="-360" max="360" step="1" value="0" />
+              </div>
+              <input type="range" id="rotation" min="-360" max="360" step="1" value="0" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Sphere Scale</span>
+                <input id="sphere-scale-value" class="value-input" type="number" min="0.42" max="1.15" step="0.01" value="1.00" />
+              </div>
+              <input type="range" id="sphere-scale" min="0.42" max="1.15" step="0.01" value="1" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Sphere Gap</span>
+                <input id="sphere-gap-value" class="value-input" type="number" min="0" max="0.38" step="0.01" value="0.00" />
+              </div>
+              <input type="range" id="sphere-gap" min="0" max="0.38" step="0.01" value="0" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Sphere Detail</span>
+                <input id="sphere-detail-value" class="value-input" type="number" min="0" max="2" step="1" value="0" />
+              </div>
+              <input type="range" id="sphere-detail" min="0" max="2" step="1" value="0" />
+            </label>
+
+            <label class="toggle-control toggle-inline">
+              <span>Hide Enclosed</span>
+              <input type="checkbox" id="hide-enclosed" checked />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <div class="panel-section-header">
+            <span class="panel-section-label">Display</span>
+          </div>
+          <div class="panel-section-content panel-controls-stack">
+            <div class="state-color-stack">
+              <label class="control state-color-block" for="inner-color">
+                <div class="control-row"><span>Inner Color</span></div>
+                <input type="color" id="inner-color" class="color-picker" value="#6b2f24" />
+              </label>
+              <label class="control state-color-block" for="outer-color">
+                <div class="control-row"><span>Outer Color</span></div>
+                <input type="color" id="outer-color" class="color-picker" value="#f4e6d2" />
+              </label>
+            </div>
+
+            <div class="control-subhead">Lighting</div>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Light Azimuth</span>
+                <input id="light-azimuth-value" class="value-input" type="number" min="-180" max="180" step="0.01" value="25.65" />
+              </div>
+              <input type="range" id="light-azimuth" min="-180" max="180" step="0.01" value="25.65" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Light Elevation</span>
+                <input id="light-elevation-value" class="value-input" type="number" min="-20" max="85" step="0.01" value="68.70" />
+              </div>
+              <input type="range" id="light-elevation" min="-20" max="85" step="0.01" value="68.7" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Key Brightness</span>
+                <input id="key-brightness-value" class="value-input" type="number" min="0" max="12" step="0.01" value="2.41" />
+              </div>
+              <input type="range" id="key-brightness" min="0" max="12" step="0.01" value="2.41" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Ambient Fill</span>
+                <input id="ambient-fill-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.30" />
+              </div>
+              <input type="range" id="ambient-fill" min="0" max="2" step="0.01" value="0.3" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Rim Brightness</span>
+                <input id="rim-brightness-value" class="value-input" type="number" min="0" max="5" step="0.01" value="0.49" />
+              </div>
+              <input type="range" id="rim-brightness" min="0" max="5" step="0.01" value="0.49" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Bounce Brightness</span>
+                <input id="bounce-brightness-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.07" />
+              </div>
+              <input type="range" id="bounce-brightness" min="0" max="2" step="0.01" value="0.07" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Shadow Strength</span>
+                <input id="shadow-strength-value" class="value-input" type="number" min="0" max="1.5" step="0.01" value="1.08" />
+              </div>
+              <input type="range" id="shadow-strength" min="0" max="1.5" step="0.01" value="1.08" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Shadow Softness</span>
+                <input id="shadow-softness-value" class="value-input" type="number" min="0" max="5" step="0.01" value="2.60" />
+              </div>
+              <input type="range" id="shadow-softness" min="0" max="5" step="0.01" value="2.6" />
+            </label>
+
+            <div class="control-subhead">Image</div>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Exposure</span>
+                <input id="exposure-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="0.70" />
+              </div>
+              <input type="range" id="exposure" min="0.1" max="3" step="0.01" value="0.7" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Brightness</span>
+                <input id="brightness-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="1.00" />
+              </div>
+              <input type="range" id="brightness" min="0.1" max="3" step="0.01" value="1" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Contrast</span>
+                <input id="contrast-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="2.25" />
+              </div>
+              <input type="range" id="contrast" min="0.1" max="3" step="0.01" value="2.25" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Roughness</span>
+                <input id="roughness-value" class="value-input" type="number" min="0" max="1" step="0.01" value="0.92" />
+              </div>
+              <input type="range" id="roughness" min="0" max="1" step="0.01" value="0.92" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Bloom Strength</span>
+                <input id="bloom-strength-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.08" />
+              </div>
+              <input type="range" id="bloom-strength" min="0" max="2" step="0.01" value="0.08" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Bloom Radius</span>
+                <input id="bloom-radius-value" class="value-input" type="number" min="0" max="1" step="0.01" value="0.26" />
+              </div>
+              <input type="range" id="bloom-radius" min="0" max="1" step="0.01" value="0.26" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Bloom Threshold</span>
+                <input id="bloom-threshold-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.00" />
+              </div>
+              <input type="range" id="bloom-threshold" min="0" max="2" step="0.01" value="0" />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <div class="panel-section-header">
+            <span class="panel-section-label">Export</span>
+          </div>
+          <div class="panel-section-content panel-controls-stack">
+            <button type="button" id="export-glb" class="pill-button control-button-wide">GLB</button>
+            <button type="button" id="export-obj" class="pill-button control-button-wide">OBJ</button>
+            <button type="button" id="screenshot" class="pill-button control-button-wide">Screenshot</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="ui-handle-bottom"></div>
+    </aside>
+
+    <div id="status-overlay" role="status" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
