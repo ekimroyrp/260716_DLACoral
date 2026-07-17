@@ -121,7 +121,7 @@ describe('model exports', () => {
     expect(json.extensionsRequired).toContain('EXT_mesh_gpu_instancing');
 
     const node = json.nodes.find(
-      (candidate: { name?: string }) => candidate.name === '260716_DLAFractals',
+      (candidate: { name?: string }) => candidate.name === '260716_DLACoral',
     );
     const attributes = node.extensions.EXT_mesh_gpu_instancing.attributes;
     expect(Object.keys(attributes)).toEqual(expect.arrayContaining([

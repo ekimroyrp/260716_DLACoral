@@ -1,6 +1,6 @@
-# 260716_DLAFractals
+# 260716_DLACoral
 
-260716_DLAFractals is an interactive Three.js application for growing and exploring three-dimensional diffusion-limited aggregation (DLA) fractals. It uses native WebGPU compute, indirect sphere instancing, birth-order color gradients, a branchable simulation timeline, and a compact floating control panel designed for large aggregates.
+260716_DLACoral is an interactive Three.js application for growing and exploring three-dimensional diffusion-limited aggregation (DLA) coral forms. It uses native WebGPU compute, indirect sphere instancing, birth-order color gradients, a branchable simulation timeline, and a compact floating control panel designed for large aggregates.
 
 ## Features
 
@@ -27,8 +27,8 @@ Unsupported browsers display an in-app WebGPU error instead of silently switchin
 ## Getting Started
 
 ```powershell
-git clone https://github.com/ekimroyrp/260716_DLAFractals.git
-cd 260716_DLAFractals
+git clone https://github.com/ekimroyrp/260716_DLACoral.git
+cd 260716_DLACoral
 npm install
 npm run dev
 ```
@@ -140,7 +140,7 @@ Parameter names and row backgrounds are non-interactive. Numeric fields, sliders
 - **OBJ** exports every displayed sphere as expanded colored geometry.
 - **Screenshot** saves the current canvas as a PNG.
 
-Export filenames begin with `260716_DLAFractals`.
+Export filenames begin with `260716_DLACoral`.
 
 ## Architecture
 

@@ -117,8 +117,8 @@ export async function createGlbBlob(data: ExportInstanceData): Promise<Blob> {
 export async function createObjBlob(data: ExportInstanceData): Promise<Blob> {
   assertExportData(data);
   const chunks: string[] = [
-    '# 260716_DLAFractals\n',
-    'o DLAFractals\n',
+    '# 260716_DLACoral\n',
+    'o DLACoral\n',
     's 1\n',
   ];
   const colors = createAgeGradientColors(data);
@@ -192,7 +192,7 @@ function createInstancedExportScene(data: ExportInstanceData): Scene {
   material.name = 'DLA Age Gradient';
 
   const mesh = new InstancedMesh(geometry, material, data.count);
-  mesh.name = '260716_DLAFractals';
+  mesh.name = '260716_DLACoral';
   mesh.instanceMatrix.array.set(data.matrices);
   mesh.instanceMatrix.needsUpdate = true;
   mesh.instanceColor = new InstancedBufferAttribute(createAgeGradientColors(data), 3);

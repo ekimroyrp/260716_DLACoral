@@ -298,13 +298,13 @@ export class DlaRenderer {
     } catch (error) {
       const reason = normalizeError(error);
       throw new Error(
-        `Native WebGPU is required to run 260716_DLAFractals. ${reason.message}`,
+        `Native WebGPU is required to run 260716_DLACoral. ${reason.message}`,
         { cause: reason },
       );
     }
     const backend = this.getWebGpuBackend();
     if (backend.isWebGPUBackend !== true || !backend.device) {
-      throw new Error('Native WebGPU is required to run 260716_DLAFractals.');
+      throw new Error('Native WebGPU is required to run 260716_DLACoral.');
     }
     this.initialized = true;
     this.prepareInstances(1, this.particleResolution);
@@ -524,18 +524,18 @@ export class DlaRenderer {
 
   async exportGlb(): Promise<void> {
     const blob = await createGlbBlob(await this.readInstanceData());
-    downloadBlob(blob, `260716_DLAFractals-${Date.now()}.glb`);
+    downloadBlob(blob, `260716_DLACoral-${Date.now()}.glb`);
   }
 
   async exportObj(): Promise<void> {
     const blob = await createObjBlob(await this.readInstanceData());
-    downloadBlob(blob, `260716_DLAFractals-${Date.now()}.obj`);
+    downloadBlob(blob, `260716_DLACoral-${Date.now()}.obj`);
   }
 
   exportScreenshot(): void {
     this.render();
     const link = document.createElement('a');
-    link.download = `260716_DLAFractals-${Date.now()}.png`;
+    link.download = `260716_DLACoral-${Date.now()}.png`;
     link.href = this.canvas.toDataURL('image/png');
     link.click();
   }

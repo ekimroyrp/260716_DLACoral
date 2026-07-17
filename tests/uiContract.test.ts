@@ -15,8 +15,8 @@ beforeEach(() => {
 
 describe('first-version UI contract', () => {
   it('uses the repository name for the browser title and README header', () => {
-    expect(document.title).toBe('260716_DLAFractals');
-    expect(readFileSync('README.md', 'utf8')).toMatch(/^# 260716_DLAFractals\r?\n/);
+    expect(document.title).toBe('260716_DLACoral');
+    expect(readFileSync('README.md', 'utf8')).toMatch(/^# 260716_DLACoral\r?\n/);
   });
 
   it('keeps the required section and export order', () => {
