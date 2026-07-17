@@ -13,7 +13,11 @@ import {
   estimateSnapshotBytes,
   type CompressedDlaSnapshot,
 } from './history';
-import { DlaRenderer, type SeedRotationPhase } from './render';
+import {
+  automaticParticleResolution,
+  DlaRenderer,
+  type SeedRotationPhase,
+} from './render';
 import {
   applySettingsSnapshot,
   createAppSnapshot,
@@ -153,12 +157,17 @@ function handleDlaChange(settings: MutableAppState['dla'], meta: DlaUiChangeMeta
   const previousResolution = state.dla.particleResolution;
   Object.assign(state.dla, settings);
   enforceDeviceLimits(state);
+  const visibleCount = status
+    ? (state.dla.hideEnclosed ? status.visibleCount : status.currentCount)
+    : 0;
+  const resolutionReduced = reduceParticleResolution(visibleCount);
 
   if (
     state.dla.targetParticles !== settings.targetParticles
     || state.dla.walkerPool !== settings.walkerPool
     || state.dla.seedRadius !== settings.seedRadius
     || state.dla.particleSize !== settings.particleSize
+    || resolutionReduced
   ) {
     ui.sync({ dla: state.dla });
   }
@@ -332,14 +341,33 @@ async function growParticleCapacity(): Promise<void> {
 }
 
 function syncStatus(next: DlaStatus): void {
+  const resolutionReduced = reduceParticleResolution(next.visibleCount);
   state.simulation.timeline = next.attachedCount;
   state.simulation.latestTimeline = next.latestAttachedCount;
   ui.setTimeline(next.attachedCount, next.latestAttachedCount);
   ui.setParticleCount(next.visibleCount);
+  if (resolutionReduced) {
+    ui.sync({ dla: state.dla });
+  }
   const activeRenderer = renderer;
   if (activeRenderer) {
     activeRenderer.update(state.dla, state.display, renderState(next));
   }
+  if (resolutionReduced) {
+    schedule(async () => rebindRendererTargets(true));
+  }
+}
+
+function reduceParticleResolution(visibleCount: number): boolean {
+  const nextResolution = automaticParticleResolution(
+    visibleCount,
+    state.dla.particleResolution,
+  );
+  if (nextResolution === state.dla.particleResolution) {
+    return false;
+  }
+  state.dla.particleResolution = nextResolution;
+  return true;
 }
 
 function renderState(next: DlaStatus) {

@@ -8,7 +8,7 @@
 - Point, spherical-shell, and ring seed shapes
 - Eight fixed attachment-neighborhood presets, strict neighbor threshold, persistent contact hits, bootstrap growth, sticking chance, walker pool, launch/kill padding, and growth batch
 - Independently sized seed particles, allowing fixed-radius shells and rings to use more small particles or fewer large ones
-- Shared resolution-adjustable icosphere mesh with indirect instanced rendering
+- Shared resolution-adjustable icosphere mesh with indirect instanced rendering and automatic live detail reduction as the aggregate grows
 - Zero-gap particle contact independent of attachment-neighborhood rules
 - Birth-order Gradient Start/End colors with adjustable contrast, bias, and blur
 - Studio lighting, soft shadows, ACES tone mapping, and bloom
@@ -75,7 +75,7 @@ Starting from an earlier timeline point removes the later future and grows a new
 | Particle Size | 1.00 | `0.10–4.00`, step `0.01` |
 | Particle Gap | 0.00 | `0–0.38`, step `0.01` |
 | Particle Scale | 1.00 | `0.10–3.00`, step `0.01` |
-| Particle Resolution | 2 | `0–2`, step `1` (60 / 240 / 960 vertices) |
+| Particle Resolution | 2 | `0–2`, step `1` (60 / 240 / 960 vertices); automatically steps from `2` to `1` at 25,000 visible particles and from `1` to `0` at 100,000 |
 | Target Particles | 1,000,000 | `1,000–1,000,000`, step `1,000` |
 | Attachment Neighborhood | Full 26 | Faces 6, Faces + Edges 18, Full 26, Weighted Full 26, Radius 2, Radius 3, Surface Hemisphere, Randomized Neighborhood |
 | Stick Neighbors | 1 | `1` through the selected neighborhood score maximum |
@@ -93,6 +93,8 @@ Starting from an earlier timeline point removes the later future and grows a new
 `Weighted Full 26` scores face, edge, and corner contacts as `3`, `2`, and `1`. Radius 2 and Radius 3 count occupied cells inside fixed spherical lattice radii. Surface Hemisphere selects the inward member of 13 opposite direction pairs. Randomized Neighborhood selects a deterministic 13-direction mask from the existing Seed. These presets use the existing Stick Neighbors threshold and add no additional settings.
 
 `Particle Size` sets both the simulation lattice spacing and the base sphere diameter. Seed Radius remains a world-space radius, so decreasing Particle Size packs more particles into Sphere and Ring seeds while increasing it uses fewer. Changing Particle Size rebuilds the seed. `Particle Scale` resizes each rendered particle around its center without changing lattice spacing, while `Particle Gap` adds proportional separation. Attachment Neighborhood affects aggregation only and never changes particle size.
+
+Particle Resolution only reduces automatically; it never increases while scrubbing back to a smaller visible prefix. The control updates to show the active resolution, and the aggregate keeps growing without a reset when a threshold is crossed.
 
 `Growth Batch = 1` commits one attachment per compute epoch. Larger values accept a bounded deterministic batch evaluated against the same pre-commit aggregate. The GPU device limit can reduce exceptionally large typed targets, walker pools, or seed shells.
 

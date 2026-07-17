@@ -15,3 +15,8 @@ export {
   type ExportInstanceData,
 } from './modelExport';
 export { createDisplayColor, setDisplayColor } from './displayColor';
+export {
+  automaticParticleResolution,
+  PARTICLE_RESOLUTION_1_VISIBLE_LIMIT,
+  PARTICLE_RESOLUTION_2_VISIBLE_LIMIT,
+} from './particleResolution';
