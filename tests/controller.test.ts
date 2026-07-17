@@ -112,6 +112,73 @@ describe('UI DLA and timeline invariants', () => {
     expect(document.getElementById('particle-count-note')?.textContent).toBe('Particle Count = 12,345');
   });
 
+  it('keeps Contact Hits neutral by default and applies both density controls without resetting', () => {
+    const changes = vi.fn();
+    controller = createUiController({ onDlaChange: changes });
+    expect(controller.dla.contactHits).toBe(1);
+    expect(controller.dla.bootstrapParticles).toBe(50);
+
+    const contactHits = input('contact-hits-value');
+    contactHits.value = '25';
+    contactHits.dispatchEvent(new Event('change', { bubbles: true }));
+    const bootstrapParticles = input('bootstrap-particles-value');
+    bootstrapParticles.value = '75';
+    bootstrapParticles.dispatchEvent(new Event('change', { bubbles: true }));
+
+    expect(controller.dla.contactHits).toBe(25);
+    expect(controller.dla.bootstrapParticles).toBe(75);
+    expect(changes).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ contactHits: 25 }),
+      expect.objectContaining({ source: 'contactHits', phase: 'commit', requiresReset: false }),
+    );
+    expect(changes).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ bootstrapParticles: 75 }),
+      expect.objectContaining({ source: 'bootstrapParticles', phase: 'commit', requiresReset: false }),
+    );
+  });
+
+  it('activates value fields and toggles only when their control is clicked directly', () => {
+    controller = createUiController();
+    const seedField = input('seed-value');
+    const seedFieldClicks = vi.fn();
+    seedField.addEventListener('click', seedFieldClicks);
+    const seedLabel = seedField.closest('label');
+    const seedText = seedLabel?.querySelector<HTMLElement>('.control-row > span');
+    seedText?.click();
+    expect(seedFieldClicks).not.toHaveBeenCalled();
+    seedField.click();
+    expect(seedFieldClicks).toHaveBeenCalledTimes(1);
+
+    const toggle = input('hide-enclosed');
+    const toggleText = toggle.closest('label')?.querySelector<HTMLElement>('span');
+    expect(toggle.checked).toBe(true);
+    toggleText?.click();
+    expect(toggle.checked).toBe(true);
+    toggle.click();
+    expect(toggle.checked).toBe(false);
+  });
+
+  it('reuses Stick Neighbors with each fixed neighborhood score limit', () => {
+    controller = createUiController();
+    const neighborhood = document.getElementById('attachment-neighborhood') as HTMLSelectElement;
+    const slider = input('stick-neighbors');
+    const field = input('stick-neighbors-value');
+
+    neighborhood.value = 'radius3';
+    neighborhood.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(Number(slider.max)).toBe(122);
+    field.value = '100';
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(controller.dla.stickNeighbors).toBe(100);
+
+    neighborhood.value = 'surfaceHemisphere';
+    neighborhood.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(Number(slider.max)).toBe(13);
+    expect(controller.dla.stickNeighbors).toBe(13);
+  });
+
   it('marks seed geometry edits as aggregate resets', () => {
     const changes = vi.fn();
     controller = createUiController({ onDlaChange: changes });

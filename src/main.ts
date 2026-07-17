@@ -20,7 +20,7 @@ import {
   createInitialAppState,
   type MutableAppState,
 } from './state';
-import type { AppSnapshot } from './types';
+import { attachmentNeighborhoodMaximum, type AppSnapshot } from './types';
 import {
   createUiController,
   type DlaUiChangeMeta,
@@ -548,9 +548,11 @@ function enforceDeviceLimits(targetState: MutableAppState): void {
   targetState.dla.particleResolution = Math.min(2, Math.max(0, Math.round(targetState.dla.particleResolution)));
   targetState.dla.stickChance = Math.min(1, Math.max(0.01, targetState.dla.stickChance));
   targetState.dla.stickNeighbors = Math.min(
-    targetState.dla.attachmentNeighborhood,
+    attachmentNeighborhoodMaximum(targetState.dla.attachmentNeighborhood),
     Math.max(1, Math.round(targetState.dla.stickNeighbors)),
   );
+  targetState.dla.contactHits = Math.max(1, Math.round(targetState.dla.contactHits));
+  targetState.dla.bootstrapParticles = Math.max(0, Math.round(targetState.dla.bootstrapParticles));
   targetState.dla.growthBatch = Math.max(1, Math.round(targetState.dla.growthBatch));
 }
 

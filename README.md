@@ -6,7 +6,7 @@
 
 - Native WebGPU simulation and rendering with no WebGL fallback
 - Point, spherical-shell, and ring seed shapes
-- Adjustable sticking neighborhood, neighbor threshold, sticking chance, walker pool, launch/kill padding, and growth batch
+- Eight fixed attachment-neighborhood presets, strict neighbor threshold, persistent contact hits, bootstrap growth, sticking chance, walker pool, launch/kill padding, and growth batch
 - Independently sized seed particles, allowing fixed-radius shells and rings to use more small particles or fewer large ones
 - Shared resolution-adjustable icosphere mesh with indirect instanced rendering
 - Zero-gap particle contact independent of attachment-neighborhood rules
@@ -77,8 +77,10 @@ Starting from an earlier timeline point removes the later future and grows a new
 | Particle Scale | 1.00 | `0.10–3.00`, step `0.01` |
 | Particle Resolution | 2 | `0–2`, step `1` (60 / 240 / 960 vertices) |
 | Target Particles | 1,000,000 | `1,000–1,000,000`, step `1,000` |
-| Attachment Neighborhood | Full | Faces 6, Faces + Edges 18, Full 26 |
-| Stick Neighbors | 1 | `1` through the selected neighborhood size |
+| Attachment Neighborhood | Full 26 | Faces 6, Faces + Edges 18, Full 26, Weighted Full 26, Radius 2, Radius 3, Surface Hemisphere, Randomized Neighborhood |
+| Stick Neighbors | 1 | `1` through the selected neighborhood score maximum |
+| Contact Hits | 1 | `1–1,000`, step `1` |
+| Bootstrap Particles | 50 | `0–10,000`, step `1` |
 | Stick Chance | 1.00 | `0.01–1.00`, step `0.01` |
 | Launch Padding | 3 | `1–32`, step `1` |
 | Kill Padding | 3 | `1–64`, step `1` |
@@ -86,7 +88,9 @@ Starting from an earlier timeline point removes the later future and grows a new
 | Walker Pool | 65,536 | `1,024–131,072`, step `1,024` |
 | Hide Enclosed | On | Omits fully surrounded particles from drawing |
 
-`Stick Neighbors` is the preferred occupied-neighbor threshold. While the aggregate is bootstrapping, growth uses the densest available candidates until that threshold becomes achievable.
+`Contact Hits` is the number of aggregate contacts an individual walker must accumulate before it can stick. The count persists across compute updates and resets when that walker is relaunched. `Bootstrap Particles` allows one-neighbor growth for that many attached particles, then enforces `Stick Neighbors` strictly. The defaults (`Contact Hits = 1`, `Bootstrap Particles = 50`, and `Stick Neighbors = 1`) preserve the original default growth result.
+
+`Weighted Full 26` scores face, edge, and corner contacts as `3`, `2`, and `1`. Radius 2 and Radius 3 count occupied cells inside fixed spherical lattice radii. Surface Hemisphere selects the inward member of 13 opposite direction pairs. Randomized Neighborhood selects a deterministic 13-direction mask from the existing Seed. These presets use the existing Stick Neighbors threshold and add no additional settings.
 
 `Particle Size` sets both the simulation lattice spacing and the base sphere diameter. Seed Radius remains a world-space radius, so decreasing Particle Size packs more particles into Sphere and Ring seeds while increasing it uses fewer. Changing Particle Size rebuilds the seed. `Particle Scale` resizes each rendered particle around its center without changing lattice spacing, while `Particle Gap` adds proportional separation. Attachment Neighborhood affects aggregation only and never changes particle size.
 
@@ -120,6 +124,8 @@ All seed particles use the exact Gradient Start albedo. Attached particles inter
 | Bloom Threshold | 0.19 | `0–2` / `0.01` |
 
 Every continuous slider has a selectable numeric input. Enter or blur commits a value, invalid text reverts, and valid values beyond an initial range extend the matching slider bound unless a simulation or WebGPU invariant requires clamping.
+
+Parameter names and row backgrounds are non-interactive. Numeric fields, sliders, selects, color inputs, and toggles respond only when clicked directly.
 
 ### History
 

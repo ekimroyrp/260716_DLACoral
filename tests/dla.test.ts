@@ -5,7 +5,6 @@ import {
   buildNeighborMetadata,
   colorAtBirth,
   countSeedPositions,
-  effectiveStickThreshold,
   countOccupiedNeighbors,
   evaluateCandidate,
   generateSeedPositions,
@@ -17,11 +16,12 @@ import {
   packCellKey,
   projectedSparseHashCapacity,
   selectGrowthBatch,
+  stickThresholdForGrowth,
   seedLatticeRadius,
   uniformSphereLaunch,
   unpackCellKey,
 } from '../src/dla';
-import type { Int3 } from '../src/types';
+import { attachmentNeighborhoodMaximum, type Int3 } from '../src/types';
 
 describe('DLA seed generation', () => {
   it('creates the classic one-cell point seed', () => {
@@ -130,10 +130,31 @@ describe('DLA sparse occupancy and neighbor metadata', () => {
     expect(packCellKey({ x: 0, y: -513, z: 0 })).toBeUndefined();
   });
 
-  it('uses the exact 6, 18, and 26 neighborhoods', () => {
-    expect(getNeighborOffsets(6)).toHaveLength(6);
-    expect(getNeighborOffsets(18)).toHaveLength(18);
-    expect(getNeighborOffsets(26)).toHaveLength(26);
+  it('uses the exact fixed neighborhood presets and score limits', () => {
+    expect(getNeighborOffsets('faces6')).toHaveLength(6);
+    expect(getNeighborOffsets('facesEdges18')).toHaveLength(18);
+    expect(getNeighborOffsets('full26')).toHaveLength(26);
+    expect(getNeighborOffsets('weightedFull26')).toHaveLength(26);
+    expect(getNeighborOffsets('radius2')).toHaveLength(32);
+    expect(getNeighborOffsets('radius3')).toHaveLength(122);
+    expect(getNeighborOffsets('surfaceHemisphere', { x: 4, y: -2, z: 1 })).toHaveLength(13);
+    expect(getNeighborOffsets('randomized', { x: 0, y: 0, z: 0 }, 260716)).toHaveLength(13);
+    expect(attachmentNeighborhoodMaximum('weightedFull26')).toBe(50);
+    expect(attachmentNeighborhoodMaximum('radius3')).toBe(122);
+  });
+
+  it('keeps directional neighborhoods fixed, inward-facing, and seed-repeatable', () => {
+    const position = { x: 7, y: -3, z: 2 };
+    const hemisphere = getNeighborOffsets('surfaceHemisphere', position);
+    expect(hemisphere.every((offset) => (
+      offset.x * position.x + offset.y * position.y + offset.z * position.z <= 0
+    ))).toBe(true);
+
+    const first = getNeighborOffsets('randomized', position, 260716);
+    const repeated = getNeighborOffsets('randomized', position, 260716);
+    const changed = getNeighborOffsets('randomized', position, 260717);
+    expect(repeated).toEqual(first);
+    expect(changed).not.toEqual(first);
   });
 
   it('resolves open-addressing collisions without losing birth ranks', () => {
@@ -154,7 +175,7 @@ describe('DLA sparse occupancy and neighbor metadata', () => {
 
   it('computes cached counts and the birth rank that encloses a particle', () => {
     const center = { x: 0, y: 0, z: 0 };
-    const positions = [center, ...getNeighborOffsets(26)];
+    const positions = [center, ...getNeighborOffsets('full26')];
     const metadata = buildNeighborMetadata(positions);
     expect(metadata.neighborCounts[0]).toBe(26);
     expect(metadata.enclosedAt[0]).toBe(26);
@@ -162,10 +183,15 @@ describe('DLA sparse occupancy and neighbor metadata', () => {
 
   it('counts neighbors against sparse occupancy', () => {
     const occupied = new SparseCellHash();
-    getNeighborOffsets(26).forEach((position, birth) => occupied.set(position, birth));
-    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 6)).toBe(6);
-    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 18)).toBe(18);
-    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 26)).toBe(26);
+    getNeighborOffsets('radius3').forEach((position, birth) => occupied.set(position, birth));
+    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 'faces6')).toBe(6);
+    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 'facesEdges18')).toBe(18);
+    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 'full26')).toBe(26);
+    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 'weightedFull26')).toBe(50);
+    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 'radius2')).toBe(32);
+    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 'radius3')).toBe(122);
+    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 'surfaceHemisphere')).toBe(13);
+    expect(countOccupiedNeighbors({ x: 0, y: 0, z: 0 }, occupied, 'randomized', 260716)).toBe(13);
   });
 });
 
@@ -178,37 +204,37 @@ describe('DLA candidate and batch rules', () => {
       evaluateCandidate(
         { x: 1, y: 0, z: 0 },
         occupied,
-        { neighborhood: 6, stickNeighbors: 1, stickChance: 0.5, roll: 0.49 },
+        { neighborhood: 'faces6', stickNeighbors: 1, stickChance: 0.5, roll: 0.49 },
       ).accepted,
     ).toBe(true);
     expect(
       evaluateCandidate(
         { x: 1, y: 0, z: 0 },
         occupied,
-        { neighborhood: 6, stickNeighbors: 2, stickChance: 1, roll: 0 },
+        { neighborhood: 'faces6', stickNeighbors: 2, stickChance: 1, roll: 0 },
       ).accepted,
     ).toBe(false);
     expect(
       evaluateCandidate(
         { x: 1, y: 0, z: 0 },
         occupied,
-        { neighborhood: 6, stickNeighbors: 1, stickChance: 0.5, roll: 0.5 },
+        { neighborhood: 'faces6', stickNeighbors: 1, stickChance: 0.5, roll: 0.5 },
       ).accepted,
     ).toBe(false);
   });
 
-  it('uses the preferred stick threshold when attainable and bootstraps to the densest frontier', () => {
-    expect(effectiveStickThreshold(6, 1)).toBe(1);
-    expect(effectiveStickThreshold(6, 4)).toBe(4);
-    expect(effectiveStickThreshold(2, 4)).toBe(2);
-    expect(effectiveStickThreshold(18, 0)).toBe(1);
+  it('uses one neighbor only for the configured bootstrap prefix and is strict afterward', () => {
+    expect(stickThresholdForGrowth(6, 0, 50)).toBe(1);
+    expect(stickThresholdForGrowth(6, 49, 50)).toBe(1);
+    expect(stickThresholdForGrowth(6, 50, 50)).toBe(6);
+    expect(stickThresholdForGrowth(6, 0, 0)).toBe(6);
     expect(
       evaluateCandidate(
         { x: 1, y: 0, z: 0 },
         occupied,
         {
-          neighborhood: 6,
-          stickNeighbors: effectiveStickThreshold(6, 1),
+          neighborhood: 'faces6',
+          stickNeighbors: stickThresholdForGrowth(6, 0, 50),
           stickChance: 1,
           roll: 0,
         },
@@ -234,7 +260,7 @@ describe('DLA candidate and batch rules', () => {
 
 describe('DLA timeline reconstruction and branching', () => {
   it('recomputes cached enclosure metadata from the displayed birth prefix', () => {
-    const positions = [{ x: 0, y: 0, z: 0 }, ...getNeighborOffsets(26)];
+    const positions = [{ x: 0, y: 0, z: 0 }, ...getNeighborOffsets('full26')];
     const partial = buildNeighborMetadata(positions.slice(0, 20));
     const complete = buildNeighborMetadata(positions);
     expect(partial.neighborCounts[0]).toBe(19);
@@ -249,7 +275,7 @@ describe('DLA timeline reconstruction and branching', () => {
     const withFuture = new SparseCellHash();
     withFuture.set({ x: 0, y: 0, z: 0 }, 0);
     withFuture.set({ x: 1, y: 0, z: 0 }, 1);
-    const options = { neighborhood: 6 as const, stickNeighbors: 1, stickChance: 1, roll: 0 };
+    const options = { neighborhood: 'faces6' as const, stickNeighbors: 1, stickChance: 1, roll: 0 };
     expect(evaluateCandidate({ x: 1, y: 0, z: 0 }, withFuture, options).accepted).toBe(false);
     expect(evaluateCandidate({ x: 1, y: 0, z: 0 }, seedOnly, options).accepted).toBe(true);
   });

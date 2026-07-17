@@ -48,7 +48,7 @@ describe('renderer icosphere geometry', () => {
       const { geometry, basePositions } = createSphereGeometry(resolution);
       try {
         const zeroGapDiameters = axisDiameters(geometry);
-        expectAllowedNeighborsContact(geometry, 26);
+        expectAllowedNeighborsContact(geometry, 'full26');
         applyParticleDimensionsToGeometry(geometry, basePositions, 0.5, 0.25, 0.8);
         axisDiameters(geometry).forEach((diameter, axis) => {
           expect(diameter).toBeCloseTo(zeroGapDiameters[axis] * 0.5 * 0.75 * 0.8, 6);
@@ -113,7 +113,11 @@ function offsets(neighborhood: AttachmentNeighborhood): Array<[number, number, n
     for (let y = -1; y <= 1; y += 1) {
       for (let x = -1; x <= 1; x += 1) {
         const axes = Number(x !== 0) + Number(y !== 0) + Number(z !== 0);
-        if (axes === 0 || (neighborhood === 6 && axes !== 1) || (neighborhood === 18 && axes === 3)) {
+        if (
+          axes === 0
+          || (neighborhood === 'faces6' && axes !== 1)
+          || (neighborhood === 'facesEdges18' && axes === 3)
+        ) {
           continue;
         }
         result.push([x, y, z]);

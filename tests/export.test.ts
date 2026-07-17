@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { InstancedMesh, Matrix4, Vector3 } from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import {
   createAgeGradientColors,
   createDisplayColor,
@@ -132,6 +134,32 @@ describe('model exports', () => {
     expect(json.accessors[attributes._COLOR_0].count).toBe(2);
     expect(node.matrix).toHaveLength(16);
     expect(Math.hypot(node.matrix[0], node.matrix[1], node.matrix[2])).toBeCloseTo(1, 6);
+  });
+
+  it('round-trips every GLB sphere instance through a supporting glTF loader', async () => {
+    const blob = await createGlbBlob(exportData({
+      matrices: translatedIdentityMatrices([0, 0, 0], [2, 3, 4], [-5, 1, 2]),
+      birthRanks: new Float32Array([0, 1, 2]),
+      count: 3,
+      seedCount: 1,
+      gradientCount: 3,
+      spherePositions: new Float32Array([0, 0, 0, 0.8, 0, 0, 0, 0.8, 0]),
+      sphereNormals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+    }));
+    const loaded = await new GLTFLoader().parseAsync(await blob.arrayBuffer(), '');
+    let instances: InstancedMesh | null = null;
+    loaded.scene.traverse((object) => {
+      if (object instanceof InstancedMesh) {
+        instances = object;
+      }
+    });
+    expect(instances).not.toBeNull();
+    expect(instances!.count).toBe(3);
+    const position = new Vector3();
+    const matrix = new Matrix4();
+    instances!.getMatrixAt(2, matrix);
+    position.setFromMatrixPosition(matrix);
+    expect(position.toArray()).toEqual([-5, 1, 2]);
   });
 
   it('expands colored OBJ triangles with baked local scale and one global transform', async () => {

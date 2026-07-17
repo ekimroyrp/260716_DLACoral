@@ -8,7 +8,6 @@ export {
   countSeedPositions,
   countOccupiedNeighbors,
   evaluateCandidate,
-  effectiveStickThreshold,
   generateSeedPositions,
   getNeighborOffsets,
   hash32,
@@ -20,6 +19,7 @@ export {
   nextPowerOfTwo,
   packCellKey,
   selectGrowthBatch,
+  stickThresholdForGrowth,
   uniformSphereLaunch,
   unpackCellKey,
 } from './cpu';

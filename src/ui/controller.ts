@@ -2,6 +2,8 @@ import {
   DEFAULT_DISPLAY_SETTINGS,
   DEFAULT_DLA_SETTINGS,
   DEFAULT_SIMULATION_SETTINGS,
+  attachmentNeighborhoodMaximum,
+  isAttachmentNeighborhood,
   type AppSnapshot,
   type AttachmentNeighborhood,
   type DisplaySettings,
@@ -127,6 +129,22 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     target.addEventListener(type, listener, options);
     cleanups.push(() => target.removeEventListener(type, listener, options));
   };
+
+  // Parameter labels are informational. Only direct interaction with an input,
+  // button, select, or toggle is allowed to activate a control.
+  listen(panel, 'click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const parameterLabel = target.closest('label.control, label.toggle-control');
+    if (
+      parameterLabel
+      && !target.closest('input, button, select, textarea, [contenteditable="true"]')
+    ) {
+      event.preventDefault();
+    }
+  });
 
   const makeTransaction = (label: string): Transaction => {
     let active = false;
@@ -421,10 +439,34 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     decimals: 0,
     integer: true,
     extendBounds: false,
-    sanitize: (value) => clamp(value, 1, dla.attachmentNeighborhood),
+    sanitize: (value) => clamp(value, 1, attachmentNeighborhoodMaximum(dla.attachmentNeighborhood)),
     onValue(value, phase) {
       dla.stickNeighbors = value;
       emitDlaChange('stickNeighbors', phase);
+    },
+  });
+
+  const contactHitsControl = bindNumericControl({
+    id: 'contact-hits',
+    label: 'Contact Hits',
+    decimals: 0,
+    integer: true,
+    sanitize: (value) => Math.max(1, value),
+    onValue(value, phase) {
+      dla.contactHits = value;
+      emitDlaChange('contactHits', phase);
+    },
+  });
+
+  const bootstrapParticlesControl = bindNumericControl({
+    id: 'bootstrap-particles',
+    label: 'Bootstrap Particles',
+    decimals: 0,
+    integer: true,
+    sanitize: (value) => Math.max(0, value),
+    onValue(value, phase) {
+      dla.bootstrapParticles = value;
+      emitDlaChange('bootstrapParticles', phase);
     },
   });
 
@@ -666,7 +708,7 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     'Attachment Neighborhood',
     (value) => {
       dla.attachmentNeighborhood = parseAttachmentNeighborhood(value);
-      stickNeighborsControl.setMaximum(dla.attachmentNeighborhood);
+      stickNeighborsControl.setMaximum(attachmentNeighborhoodMaximum(dla.attachmentNeighborhood));
       dla.stickNeighbors = stickNeighborsControl.set(dla.stickNeighbors);
       emitDlaChange('attachmentNeighborhood', 'commit');
     },
@@ -878,8 +920,10 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     particleResolutionControl.set(dla.particleResolution);
     targetParticlesControl.set(dla.targetParticles);
     attachmentNeighborhoodSelect.set(String(dla.attachmentNeighborhood));
-    stickNeighborsControl.setMaximum(dla.attachmentNeighborhood);
+    stickNeighborsControl.setMaximum(attachmentNeighborhoodMaximum(dla.attachmentNeighborhood));
     dla.stickNeighbors = stickNeighborsControl.set(dla.stickNeighbors);
+    contactHitsControl.set(dla.contactHits);
+    bootstrapParticlesControl.set(dla.bootstrapParticles);
     stickChanceControl.set(dla.stickChance);
     launchPaddingControl.set(dla.launchPadding);
     killPaddingControl.set(dla.killPadding);
@@ -1036,11 +1080,7 @@ function requiredElement<T extends typeof HTMLElement>(id: string, constructor: 
 }
 
 function parseAttachmentNeighborhood(value: string): AttachmentNeighborhood {
-  const parsed = Number.parseInt(value, 10);
-  if (parsed === 6 || parsed === 18 || parsed === 26) {
-    return parsed;
-  }
-  return 26;
+  return isAttachmentNeighborhood(value) ? value : 'full26';
 }
 
 function normalizeNumericValue(value: number, decimals: number, integer: boolean): number {

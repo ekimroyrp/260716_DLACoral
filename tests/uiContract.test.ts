@@ -55,6 +55,8 @@ describe('first-version UI contract', () => {
       ['particle-resolution', 0, 2, 1, 2],
       ['target-particles', 1_000, 1_000_000, 1_000, 1_000_000],
       ['stick-neighbors', 1, 26, 1, 1],
+      ['contact-hits', 1, 1_000, 1, 1],
+      ['bootstrap-particles', 0, 10_000, 1, 50],
       ['stick-chance', 0.01, 1, 0.01, 1],
       ['launch-padding', 1, 32, 1, 3],
       ['kill-padding', 1, 64, 1, 3],
@@ -99,11 +101,16 @@ describe('first-version UI contract', () => {
     ]);
     expect(requiredSelect('seed-shape').value).toBe('point');
     expect(selectOptions('attachment-neighborhood')).toEqual([
-      ['6', 'Faces 6'],
-      ['18', 'Faces + Edges 18'],
-      ['26', 'Full 26'],
+      ['faces6', 'Faces 6'],
+      ['facesEdges18', 'Faces + Edges 18'],
+      ['full26', 'Full 26'],
+      ['weightedFull26', 'Weighted Full 26'],
+      ['radius2', 'Radius 2'],
+      ['radius3', 'Radius 3'],
+      ['surfaceHemisphere', 'Surface Hemisphere'],
+      ['randomized', 'Randomized Neighborhood'],
     ]);
-    expect(requiredSelect('attachment-neighborhood').value).toBe('26');
+    expect(requiredSelect('attachment-neighborhood').value).toBe('full26');
     expect(requiredInput('inner-color').value).toBe('#ac2a4a');
     expect(requiredInput('outer-color').value).toBe('#ffffff');
     const swatches = document.querySelector('.gradient-swatches');
@@ -138,6 +145,8 @@ describe('first-version UI contract', () => {
       'Target Particles',
       'Attachment Neighborhood',
       'Stick Neighbors',
+      'Contact Hits',
+      'Bootstrap Particles',
       'Stick Chance',
       'Launch Padding',
       'Kill Padding',
@@ -155,7 +164,7 @@ describe('first-version UI contract', () => {
     expect(document.getElementById('global-scale')).toBeNull();
     expect(document.getElementById('local-scale')).toBeNull();
     expect(document.getElementById('stick-neighbors-help')?.textContent).toBe(
-      'Preferred occupied neighbors; growth uses the densest available candidates while bootstrapping.',
+      'Required neighborhood score after the bootstrap period.',
     );
     expect(requiredInput('stick-neighbors').getAttribute('aria-describedby')).toBe('stick-neighbors-help');
     expect(requiredInput('stick-neighbors-value').getAttribute('aria-describedby')).toBe('stick-neighbors-help');

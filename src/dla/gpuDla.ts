@@ -1,4 +1,11 @@
-import type { DlaSettings, DlaSnapshot, Int3 } from '../types';
+import {
+  attachmentNeighborhoodCode,
+  attachmentNeighborhoodMaximum,
+  isAttachmentNeighborhood,
+  type DlaSettings,
+  type DlaSnapshot,
+  type Int3,
+} from '../types';
 import {
   HASH_COORD_MAX,
   HASH_COORD_MIN,
@@ -10,9 +17,9 @@ import {
 
 const WORKGROUP_SIZE = 128;
 const PARAM_WORDS = 32;
-const COUNTER_WORDS = 10;
+const COUNTER_WORDS = 9;
 const HASH_ENTRY_BYTES = 16;
-const WALKER_BYTES = 16;
+const WALKER_BYTES = 32;
 const CANDIDATE_BYTES = 32;
 const PARTICLE_BYTES = 32;
 const MATRIX_BYTES = 64;
@@ -364,7 +371,7 @@ export class GpuDlaSimulator {
             0,
             snapshot.walkerState,
             0,
-            copyCount * 4,
+            copyCount * WALKER_BYTES,
           );
         }
       }
@@ -597,7 +604,7 @@ export class GpuDlaSimulator {
     u32[3] = settings.walkerPool;
     u32[4] = state.seedCount;
     u32[5] = prefixCount;
-    u32[6] = settings.attachmentNeighborhood;
+    u32[6] = attachmentNeighborhoodCode(settings.attachmentNeighborhood);
     u32[7] = settings.stickNeighbors;
     u32[8] = Math.round(settings.stickChance * 1_000_000);
     u32[9] = settings.launchPadding;
@@ -611,8 +618,10 @@ export class GpuDlaSimulator {
     u32[17] = settings.targetParticles;
     u32[18] = state.epoch;
     f32[19] = Math.max(0.001, settings.particleSize);
+    u32[20] = settings.contactHits;
     u32[21] = MAX_HASH_PROBES;
     u32[22] = Number(this.device.limits.maxComputeWorkgroupsPerDimension) * WORKGROUP_SIZE;
+    u32[23] = settings.bootstrapParticles;
     this.device.queue.writeBuffer(state.buffers.params, 0, values);
   }
 
@@ -968,12 +977,20 @@ export class GpuDlaSimulator {
 }
 
 function normalizeSettings(settings: DlaSettings, particleCapacity: number, walkerCapacity: number): DlaSettings {
-  const neighborhood = settings.attachmentNeighborhood === 6 || settings.attachmentNeighborhood === 18 ? settings.attachmentNeighborhood : 26;
+  const neighborhood = isAttachmentNeighborhood(settings.attachmentNeighborhood)
+    ? settings.attachmentNeighborhood
+    : 'full26';
   return {
     ...settings,
     targetParticles: clampInteger(settings.targetParticles, 1, particleCapacity),
     attachmentNeighborhood: neighborhood,
-    stickNeighbors: clampInteger(settings.stickNeighbors, 1, neighborhood),
+    stickNeighbors: clampInteger(
+      settings.stickNeighbors,
+      1,
+      attachmentNeighborhoodMaximum(neighborhood),
+    ),
+    contactHits: clampInteger(settings.contactHits, 1, 1_000_000),
+    bootstrapParticles: clampInteger(settings.bootstrapParticles, 0, particleCapacity),
     stickChance: Math.max(0, Math.min(1, settings.stickChance)),
     launchPadding: clampInteger(settings.launchPadding, 1, 1024),
     killPadding: clampInteger(settings.killPadding, 1, 4096),
@@ -1035,6 +1052,14 @@ const HASH_COORD_BIAS: i32 = 512;
 const HASH_COORD_MAX: i32 = 511;
 const META_NEIGHBOR_MASK: u32 = 0x1fffu;
 const META_STATE_SHIFT: u32 = 30u;
+const NEIGHBORHOOD_FACES_6: u32 = 0u;
+const NEIGHBORHOOD_FACES_EDGES_18: u32 = 1u;
+const NEIGHBORHOOD_FULL_26: u32 = 2u;
+const NEIGHBORHOOD_WEIGHTED_FULL_26: u32 = 3u;
+const NEIGHBORHOOD_RADIUS_2: u32 = 4u;
+const NEIGHBORHOOD_RADIUS_3: u32 = 5u;
+const NEIGHBORHOOD_SURFACE_HEMISPHERE: u32 = 6u;
+const NEIGHBORHOOD_RANDOMIZED: u32 = 7u;
 const NEIGHBOR_OFFSETS: array<vec3<i32>, 26> = array<vec3<i32>, 26>(
   vec3<i32>(-1, -1, -1), vec3<i32>( 0, -1, -1), vec3<i32>( 1, -1, -1),
   vec3<i32>(-1,  0, -1), vec3<i32>( 0,  0, -1), vec3<i32>( 1,  0, -1),
@@ -1056,6 +1081,10 @@ struct HashEntry {
 
 struct Walker {
   data: vec4<i32>,
+  contactHits: u32,
+  pad0: u32,
+  pad1: u32,
+  pad2: u32,
 };
 
 struct Candidate {
@@ -1084,7 +1113,6 @@ struct Counters {
   overflow: atomic<u32>,
   hashEntries: atomic<u32>,
   newestVisibleBirth: atomic<u32>,
-  maxCandidateNeighbors: atomic<u32>,
 };
 
 struct Params {
@@ -1108,10 +1136,10 @@ struct Params {
   targetParticles: u32,
   epoch: u32,
   particleSize: f32,
-  reserved1: u32,
+  contactHits: u32,
   maxHashProbes: u32,
   clearThreads: u32,
-  pad1: u32,
+  bootstrapParticles: u32,
   pad2: u32,
   pad3: u32,
   pad4: u32,
@@ -1267,17 +1295,12 @@ fn packedCount(packed: u32, neighborhood: u32) -> u32 {
   let faces = packed & 15u;
   let edges = (packed >> 4u) & 31u;
   let corners = (packed >> 9u) & 15u;
-  if (neighborhood == 6u) { return faces; }
-  if (neighborhood == 18u) { return faces + edges; }
-  return faces + edges + corners;
-}
-
-fn cachedNeighborCount(position: vec3<i32>, neighborhood: u32) -> u32 {
-  let slot = findHash(position);
-  if (slot == INVALID || entryState(slot) != FRONTIER) {
-    return 0u;
+  if (neighborhood == NEIGHBORHOOD_FACES_6) { return faces; }
+  if (neighborhood == NEIGHBORHOOD_FACES_EDGES_18) { return faces + edges; }
+  if (neighborhood == NEIGHBORHOOD_WEIGHTED_FULL_26) {
+    return faces * 3u + edges * 2u + corners;
   }
-  return packedCount(entryNeighbors(slot), neighborhood);
+  return faces + edges + corners;
 }
 
 fn scanPackedNeighbors(position: vec3<i32>) -> vec3<u32> {
@@ -1299,6 +1322,60 @@ fn scanPackedNeighbors(position: vec3<i32>) -> vec3<u32> {
 
 fn offsetFor(index: u32) -> vec3<i32> {
   return NEIGHBOR_OFFSETS[min(index, 25u)];
+}
+
+fn sphericalNeighborCount(position: vec3<i32>, radius: i32) -> u32 {
+  var count = 0u;
+  let radiusSquared = radius * radius;
+  for (var z = -radius; z <= radius; z = z + 1) {
+    for (var y = -radius; y <= radius; y = y + 1) {
+      for (var x = -radius; x <= radius; x = x + 1) {
+        let distanceSquared = x * x + y * y + z * z;
+        if (distanceSquared > 0 && distanceSquared <= radiusSquared) {
+          if (findOccupied(position + vec3<i32>(x, y, z)) != INVALID) {
+            count = count + 1u;
+          }
+        }
+      }
+    }
+  }
+  return count;
+}
+
+fn pairedNeighborCount(position: vec3<i32>, randomized: bool) -> u32 {
+  var count = 0u;
+  for (var index = 0u; index < 13u; index = index + 1u) {
+    let baseOffset = offsetFor(index);
+    var useOpposite = (
+      baseOffset.x * position.x
+      + baseOffset.y * position.y
+      + baseOffset.z * position.z
+    ) > 0;
+    if (randomized) {
+      useOpposite = (hash32(params.seed ^ ((index + 1u) * 0x9e3779b9u)) & 1u) != 0u;
+    }
+    let offset = select(baseOffset, -baseOffset, useOpposite);
+    if (findOccupied(position + offset) != INVALID) {
+      count = count + 1u;
+    }
+  }
+  return count;
+}
+
+fn attachmentNeighborCount(position: vec3<i32>, packed: u32) -> u32 {
+  if (params.neighborhood <= NEIGHBORHOOD_WEIGHTED_FULL_26) {
+    return packedCount(packed, params.neighborhood);
+  }
+  if (params.neighborhood == NEIGHBORHOOD_RADIUS_2) {
+    return sphericalNeighborCount(position, 2);
+  }
+  if (params.neighborhood == NEIGHBORHOOD_RADIUS_3) {
+    return sphericalNeighborCount(position, 3);
+  }
+  return pairedNeighborCount(
+    position,
+    params.neighborhood == NEIGHBORHOOD_RANDOMIZED
+  );
 }
 
 fn radiusSq(position: vec3<i32>) -> u32 {
@@ -1402,7 +1479,6 @@ fn clearHash(@builtin(global_invocation_id) id: vec3<u32>) {
     atomicStore(&counters.overflow, 0u);
     atomicStore(&counters.hashEntries, 0u);
     atomicStore(&counters.newestVisibleBirth, 0u);
-    atomicStore(&counters.maxCandidateNeighbors, 0u);
   }
 }
 
@@ -1424,7 +1500,7 @@ fn rebuildNeighbors(@builtin(global_invocation_id) id: vec3<u32>) {
   }
   let position = particles[id.x].position.xyz;
   let scanned = scanPackedNeighbors(position);
-  let count = packedCount(scanned.x, 26u);
+  let count = packedCount(scanned.x, NEIGHBORHOOD_FULL_26);
   particles[id.x].neighborCount = count;
   particles[id.x].enclosedAt = select(INVALID, scanned.z, count == 26u);
   let slot = findOccupied(position);
@@ -1503,6 +1579,7 @@ fn initWalkers(@builtin(global_invocation_id) id: vec3<u32>) {
   var rng = hash32(params.seed ^ ((id.x + 1u) * 0x9e3779b9u) ^ params.branchSerial);
   let position = launchPosition(&rng);
   walkers[id.x].data = vec4<i32>(position, bitcast<i32>(rng));
+  walkers[id.x].contactHits = 0u;
 }
 
 @compute @workgroup_size(1)
@@ -1510,7 +1587,6 @@ fn clearCandidates() {
   atomicStore(&counters.candidateCount, 0u);
   atomicStore(&counters.attachedThisStep, 0u);
   atomicStore(&counters.epoch, params.epoch);
-  atomicStore(&counters.maxCandidateNeighbors, 0u);
 }
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
@@ -1522,6 +1598,7 @@ fn advanceWalkers(@builtin(global_invocation_id) id: vec3<u32>) {
   candidates[walkerIndex].valid = 0u;
   var position = walkers[walkerIndex].data.xyz;
   var rng = bitcast<u32>(walkers[walkerIndex].data.w);
+  var contactHits = walkers[walkerIndex].contactHits;
   let launchRadius = ceil(sqrt(f32(atomicLoad(&counters.maxRadiusSq)))) + f32(params.launchPadding);
   let killRadius = launchRadius + f32(params.killPadding);
   let killRadiusSq = u32(killRadius * killRadius);
@@ -1538,13 +1615,27 @@ fn advanceWalkers(@builtin(global_invocation_id) id: vec3<u32>) {
 
     if (radiusSq(position) > killRadiusSq) {
       position = launchPosition(&rng);
+      contactHits = 0u;
       continue;
     }
     let frontierSlot = findHash(position);
     if (frontierSlot == INVALID || entryState(frontierSlot) != FRONTIER) {
       continue;
     }
-    let count = packedCount(entryNeighbors(frontierSlot), params.neighborhood);
+    let count = attachmentNeighborCount(position, entryNeighbors(frontierSlot));
+    contactHits = contactHits + 1u;
+    if (contactHits < params.contactHits) {
+      continue;
+    }
+    let attachedCount = atomicLoad(&counters.particleCount) - params.seedCount;
+    let requiredNeighbors = select(
+      params.stickNeighbors,
+      1u,
+      attachedCount < params.bootstrapParticles
+    );
+    if (count < requiredNeighbors) {
+      continue;
+    }
     let roll = u32(randomFloat(&rng) * 1000000.0);
     if (roll >= params.stickChance) {
       continue;
@@ -1554,11 +1645,12 @@ fn advanceWalkers(@builtin(global_invocation_id) id: vec3<u32>) {
     candidates[walkerIndex].neighborCount = count;
     candidates[walkerIndex].rank = walkerIndex;
     atomicAdd(&counters.candidateCount, 1u);
-    atomicMax(&counters.maxCandidateNeighbors, count);
     position = launchPosition(&rng);
+    contactHits = 0u;
     break;
   }
   walkers[walkerIndex].data = vec4<i32>(position, bitcast<i32>(rng));
+  walkers[walkerIndex].contactHits = contactHits;
 }
 
 @compute @workgroup_size(1)
@@ -1566,13 +1658,17 @@ fn commitCandidates() {
   var particleCount = atomicLoad(&counters.particleCount);
   var attached = 0u;
   let limit = min(params.growthBatch, params.targetParticles - min(params.targetParticles, particleCount));
-  let attainable = atomicLoad(&counters.maxCandidateNeighbors);
-  let effectiveStickNeighbors = max(1u, min(params.stickNeighbors, attainable));
   for (var walkerIndex = 0u; walkerIndex < params.walkerCount && attached < limit; walkerIndex = walkerIndex + 1u) {
     if (candidates[walkerIndex].valid == 0u || particleCount >= params.particleCapacity) {
       continue;
     }
-    if (candidates[walkerIndex].neighborCount < effectiveStickNeighbors) {
+    let attachedCount = particleCount - params.seedCount;
+    let requiredNeighbors = select(
+      params.stickNeighbors,
+      1u,
+      attachedCount < params.bootstrapParticles
+    );
+    if (candidates[walkerIndex].neighborCount < requiredNeighbors) {
       continue;
     }
     let position = candidates[walkerIndex].position.xyz;
@@ -1586,7 +1682,7 @@ fn commitCandidates() {
     if (hashIndex == INVALID) {
       continue;
     }
-    let count = packedCount(packed, 26u);
+    let count = packedCount(packed, NEIGHBORHOOD_FULL_26);
     particles[birth].position = vec4<i32>(position, 0);
     particles[birth].enclosedAt = select(INVALID, birth, count == 26u);
     particles[birth].slot = INVALID;
@@ -1608,7 +1704,10 @@ fn commitCandidates() {
           let otherBirth = atomicLoad(&hashTable[otherHash].birth);
           if (otherBirth != birth) {
             let oldMeta = atomicAdd(&hashTable[otherHash].packedData, increment);
-            let updated = packedCount((oldMeta & META_NEIGHBOR_MASK) + increment, 26u);
+            let updated = packedCount(
+              (oldMeta & META_NEIGHBOR_MASK) + increment,
+              NEIGHBORHOOD_FULL_26
+            );
             particles[otherBirth].neighborCount = updated;
             if (updated == 26u && particles[otherBirth].enclosedAt == INVALID) {
               particles[otherBirth].enclosedAt = birth;

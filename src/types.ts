@@ -1,5 +1,50 @@
 export type SeedShape = 'point' | 'sphere' | 'ring';
-export type AttachmentNeighborhood = 6 | 18 | 26;
+export const ATTACHMENT_NEIGHBORHOODS = [
+  'faces6',
+  'facesEdges18',
+  'full26',
+  'weightedFull26',
+  'radius2',
+  'radius3',
+  'surfaceHemisphere',
+  'randomized',
+] as const;
+export type AttachmentNeighborhood = typeof ATTACHMENT_NEIGHBORHOODS[number];
+
+const ATTACHMENT_NEIGHBORHOOD_MAXIMUMS: Record<AttachmentNeighborhood, number> = {
+  faces6: 6,
+  facesEdges18: 18,
+  full26: 26,
+  weightedFull26: 50,
+  radius2: 32,
+  radius3: 122,
+  surfaceHemisphere: 13,
+  randomized: 13,
+};
+
+const ATTACHMENT_NEIGHBORHOOD_CODES: Record<AttachmentNeighborhood, number> = {
+  faces6: 0,
+  facesEdges18: 1,
+  full26: 2,
+  weightedFull26: 3,
+  radius2: 4,
+  radius3: 5,
+  surfaceHemisphere: 6,
+  randomized: 7,
+};
+
+export function isAttachmentNeighborhood(value: unknown): value is AttachmentNeighborhood {
+  return typeof value === 'string'
+    && (ATTACHMENT_NEIGHBORHOODS as readonly string[]).includes(value);
+}
+
+export function attachmentNeighborhoodMaximum(neighborhood: AttachmentNeighborhood): number {
+  return ATTACHMENT_NEIGHBORHOOD_MAXIMUMS[neighborhood];
+}
+
+export function attachmentNeighborhoodCode(neighborhood: AttachmentNeighborhood): number {
+  return ATTACHMENT_NEIGHBORHOOD_CODES[neighborhood];
+}
 
 export interface SimulationSettings {
   running: boolean;
@@ -15,6 +60,8 @@ export interface DlaSettings {
   targetParticles: number;
   attachmentNeighborhood: AttachmentNeighborhood;
   stickNeighbors: number;
+  contactHits: number;
+  bootstrapParticles: number;
   stickChance: number;
   launchPadding: number;
   killPadding: number;
@@ -87,8 +134,10 @@ export const DEFAULT_DLA_SETTINGS: DlaSettings = {
   seedShape: 'point',
   seedRadius: 8,
   targetParticles: 1_000_000,
-  attachmentNeighborhood: 26,
+  attachmentNeighborhood: 'full26',
   stickNeighbors: 1,
+  contactHits: 1,
+  bootstrapParticles: 50,
   stickChance: 1,
   launchPadding: 3,
   killPadding: 3,

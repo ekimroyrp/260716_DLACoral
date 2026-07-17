@@ -1,4 +1,9 @@
-import type { AttachmentNeighborhood, Int3, SeedShape } from '../types';
+import {
+  attachmentNeighborhoodMaximum,
+  type AttachmentNeighborhood,
+  type Int3,
+  type SeedShape,
+} from '../types';
 
 const UINT32_RANGE = 0x1_0000_0000;
 export const HASH_COORD_MIN = -512;
@@ -12,6 +17,7 @@ export interface CandidateOptions {
   neighborhood: AttachmentNeighborhood;
   stickNeighbors: number;
   stickChance: number;
+  seed?: number;
   /** A deterministic value in [0, 1). */
   roll: number;
 }
@@ -33,11 +39,16 @@ export interface NeighborMetadata {
   enclosedAt: Uint32Array;
 }
 
-/** Preferred stick threshold, reduced only when the epoch cannot attain it. */
-export function effectiveStickThreshold(requested: number, maximumCandidateNeighbors: number): number {
+/** Uses one-neighbor growth only for the configured attached-particle bootstrap prefix. */
+export function stickThresholdForGrowth(
+  requested: number,
+  attachedCount: number,
+  bootstrapParticles: number,
+): number {
   const preferred = Math.max(1, Math.floor(Number.isFinite(requested) ? requested : 1));
-  const attainable = Math.max(1, Math.floor(Number.isFinite(maximumCandidateNeighbors) ? maximumCandidateNeighbors : 1));
-  return Math.min(preferred, attainable);
+  const attached = Math.max(0, Math.floor(Number.isFinite(attachedCount) ? attachedCount : 0));
+  const bootstrap = Math.max(0, Math.floor(Number.isFinite(bootstrapParticles) ? bootstrapParticles : 0));
+  return attached < bootstrap ? 1 : preferred;
 }
 
 export function hash32(value: number): number {
@@ -94,17 +105,30 @@ export function nextPowerOfTwo(value: number): number {
   return 2 ** Math.ceil(Math.log2(value));
 }
 
-export function getNeighborOffsets(neighborhood: AttachmentNeighborhood): readonly Int3[] {
+export function getNeighborOffsets(
+  neighborhood: AttachmentNeighborhood,
+  position: Int3 = ORIGIN,
+  seed = 0,
+): readonly Int3[] {
+  if (neighborhood === 'surfaceHemisphere') {
+    return pairedNeighborOffsets((offset) => dot(offset, position) > 0);
+  }
+  if (neighborhood === 'randomized') {
+    return pairedNeighborOffsets((_, index) => (
+      hash32((seed ^ Math.imul(index + 1, 0x9e37_79b9)) >>> 0) & 1
+    ) !== 0);
+  }
   return NEIGHBOR_OFFSETS[neighborhood];
 }
 
 export function countOccupiedNeighbors(
   position: Int3,
   occupied: CellLookup,
-  neighborhood: AttachmentNeighborhood = 26,
+  neighborhood: AttachmentNeighborhood = 'full26',
+  seed = 0,
 ): number {
   let count = 0;
-  for (const offset of getNeighborOffsets(neighborhood)) {
+  for (const offset of getNeighborOffsets(neighborhood, position, seed)) {
     if (
       occupied.has({
         x: position.x + offset.x,
@@ -112,7 +136,7 @@ export function countOccupiedNeighbors(
         z: position.z + offset.z,
       })
     ) {
-      count += 1;
+      count += neighborhood === 'weightedFull26' ? weightedNeighborValue(offset) : 1;
     }
   }
   return count;
@@ -126,8 +150,16 @@ export function evaluateCandidate(
   if (occupied.has(position)) {
     return { accepted: false, neighborCount: 0 };
   }
-  const neighborCount = countOccupiedNeighbors(position, occupied, options.neighborhood);
-  const required = Math.max(1, Math.min(options.neighborhood, Math.floor(options.stickNeighbors)));
+  const neighborCount = countOccupiedNeighbors(
+    position,
+    occupied,
+    options.neighborhood,
+    options.seed,
+  );
+  const required = Math.max(
+    1,
+    Math.min(attachmentNeighborhoodMaximum(options.neighborhood), Math.floor(options.stickNeighbors)),
+  );
   const chance = Math.max(0, Math.min(1, options.stickChance));
   return {
     accepted: neighborCount >= required && options.roll < chance,
@@ -297,7 +329,7 @@ export function colorAtBirth(innerHex: string, outerHex: string, birthRank: numb
 }
 
 export function isFullyEnclosed(position: Int3, occupied: CellLookup): boolean {
-  return countOccupiedNeighbors(position, occupied, 26) === 26;
+  return countOccupiedNeighbors(position, occupied, 'full26') === 26;
 }
 
 export function buildNeighborMetadata(positions: readonly Int3[]): NeighborMetadata {
@@ -309,7 +341,7 @@ export function buildNeighborMetadata(positions: readonly Int3[]): NeighborMetad
   positions.forEach((position, birth) => {
     let count = 0;
     let latestNeighborBirth = 0;
-    for (const offset of getNeighborOffsets(26)) {
+    for (const offset of getNeighborOffsets('full26')) {
       const neighborBirth = occupied.get({
         x: position.x + offset.x,
         y: position.y + offset.y,
@@ -459,29 +491,71 @@ function rotateLeft(value: number, shift: number): number {
   return ((value << shift) | (value >>> (32 - shift))) >>> 0;
 }
 
-function createNeighborOffsets(): Record<AttachmentNeighborhood, readonly Int3[]> {
-  const faces: Int3[] = [];
-  const edges: Int3[] = [];
-  const corners: Int3[] = [];
+function createCubeOffsets(): Int3[] {
+  const offsets: Int3[] = [];
   for (let z = -1; z <= 1; z += 1) {
     for (let y = -1; y <= 1; y += 1) {
       for (let x = -1; x <= 1; x += 1) {
-        const distance = Math.abs(x) + Math.abs(y) + Math.abs(z);
-        if (distance === 1) {
-          faces.push({ x, y, z });
-        } else if (distance === 2) {
-          edges.push({ x, y, z });
-        } else if (distance === 3) {
-          corners.push({ x, y, z });
+        if (x !== 0 || y !== 0 || z !== 0) {
+          offsets.push(Object.freeze({ x, y, z }));
         }
       }
     }
   }
-  return {
-    6: Object.freeze(faces),
-    18: Object.freeze([...faces, ...edges]),
-    26: Object.freeze([...faces, ...edges, ...corners]),
-  };
+  return offsets;
 }
 
-const NEIGHBOR_OFFSETS = createNeighborOffsets();
+function createSphericalOffsets(radius: number): Int3[] {
+  const offsets: Int3[] = [];
+  const radiusSq = radius * radius;
+  for (let z = -radius; z <= radius; z += 1) {
+    for (let y = -radius; y <= radius; y += 1) {
+      for (let x = -radius; x <= radius; x += 1) {
+        const distanceSq = x * x + y * y + z * z;
+        if (distanceSq > 0 && distanceSq <= radiusSq) {
+          offsets.push(Object.freeze({ x, y, z }));
+        }
+      }
+    }
+  }
+  return offsets;
+}
+
+function pairedNeighborOffsets(useOpposite: (offset: Int3, index: number) => boolean): Int3[] {
+  const result: Int3[] = [];
+  for (let index = 0; index < 13; index += 1) {
+    const offset = FULL_26_OFFSETS[index];
+    result.push(useOpposite(offset, index)
+      ? { x: -offset.x, y: -offset.y, z: -offset.z }
+      : offset);
+  }
+  return result;
+}
+
+function weightedNeighborValue(offset: Int3): number {
+  const manhattanDistance = Math.abs(offset.x) + Math.abs(offset.y) + Math.abs(offset.z);
+  return manhattanDistance === 1 ? 3 : manhattanDistance === 2 ? 2 : 1;
+}
+
+function dot(a: Int3, b: Int3): number {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+const ORIGIN: Int3 = Object.freeze({ x: 0, y: 0, z: 0 });
+const FULL_26_OFFSETS = Object.freeze(createCubeOffsets());
+const FACES_6_OFFSETS = Object.freeze(FULL_26_OFFSETS.filter(
+  (offset) => Math.abs(offset.x) + Math.abs(offset.y) + Math.abs(offset.z) === 1,
+));
+const FACES_EDGES_18_OFFSETS = Object.freeze(FULL_26_OFFSETS.filter(
+  (offset) => Math.abs(offset.x) + Math.abs(offset.y) + Math.abs(offset.z) <= 2,
+));
+const RADIUS_2_OFFSETS = Object.freeze(createSphericalOffsets(2));
+const RADIUS_3_OFFSETS = Object.freeze(createSphericalOffsets(3));
+const NEIGHBOR_OFFSETS: Record<Exclude<AttachmentNeighborhood, 'surfaceHemisphere' | 'randomized'>, readonly Int3[]> = {
+  faces6: FACES_6_OFFSETS,
+  facesEdges18: FACES_EDGES_18_OFFSETS,
+  full26: FULL_26_OFFSETS,
+  weightedFull26: FULL_26_OFFSETS,
+  radius2: RADIUS_2_OFFSETS,
+  radius3: RADIUS_3_OFFSETS,
+};

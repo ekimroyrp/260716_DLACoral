@@ -152,9 +152,14 @@
               <div class="control-row"><span>Attachment Neighborhood</span></div>
               <span class="select-shell select-control" data-select="attachment-neighborhood">
                 <select id="attachment-neighborhood" class="native-select-hidden">
-                  <option value="6">Faces 6</option>
-                  <option value="18">Faces + Edges 18</option>
-                  <option value="26" selected>Full 26</option>
+                  <option value="faces6">Faces 6</option>
+                  <option value="facesEdges18">Faces + Edges 18</option>
+                  <option value="full26" selected>Full 26</option>
+                  <option value="weightedFull26">Weighted Full 26</option>
+                  <option value="radius2">Radius 2</option>
+                  <option value="radius3">Radius 3</option>
+                  <option value="surfaceHemisphere">Surface Hemisphere</option>
+                  <option value="randomized">Randomized Neighborhood</option>
                 </select>
                 <button type="button" id="attachment-neighborhood-trigger" class="select-trigger">Full 26</button>
                 <ul id="attachment-neighborhood-menu" class="select-menu" hidden></ul>
@@ -167,7 +172,23 @@
                 <input id="stick-neighbors-value" class="value-input" type="number" min="1" max="26" step="1" value="1" aria-describedby="stick-neighbors-help" />
               </div>
               <input type="range" id="stick-neighbors" min="1" max="26" step="1" value="1" aria-describedby="stick-neighbors-help" />
-              <span id="stick-neighbors-help" class="control-help">Preferred occupied neighbors; growth uses the densest available candidates while bootstrapping.</span>
+              <span id="stick-neighbors-help" class="control-help">Required neighborhood score after the bootstrap period.</span>
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Contact Hits</span>
+                <input id="contact-hits-value" class="value-input" type="number" min="1" max="1000" step="1" value="1" />
+              </div>
+              <input type="range" id="contact-hits" min="1" max="1000" step="1" value="1" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Bootstrap Particles</span>
+                <input id="bootstrap-particles-value" class="value-input" type="number" min="0" max="10000" step="1" value="50" />
+              </div>
+              <input type="range" id="bootstrap-particles" min="0" max="10000" step="1" value="50" />
             </label>
 
             <label class="control">
