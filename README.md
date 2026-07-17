@@ -136,7 +136,7 @@ Parameter names and row backgrounds are non-interactive. Numeric fields, sliders
 
 ### Export
 
-- **GLB** exports the displayed aggregate with `EXT_mesh_gpu_instancing`, current transforms, and age colors.
+- **GLB** exports every displayed sphere as compatible expanded mesh geometry with current transforms and age colors.
 - **OBJ** exports every displayed sphere as expanded colored geometry.
 - **Screenshot** saves the current canvas as a PNG.
 

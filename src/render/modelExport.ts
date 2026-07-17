@@ -1,8 +1,6 @@
 import {
   BufferAttribute,
   BufferGeometry,
-  InstancedBufferAttribute,
-  InstancedMesh,
   Matrix3,
   Matrix4,
   Mesh,
@@ -89,10 +87,10 @@ export function shapeAgeGradient(
   return shapedAge + (linearAge - shapedAge) * blurAmount;
 }
 
-/** Creates a compact GLB using EXT_mesh_gpu_instancing. */
+/** Creates a broadly compatible GLB with every displayed sphere baked into one mesh. */
 export async function createGlbBlob(data: ExportInstanceData): Promise<Blob> {
   assertExportData(data);
-  const scene = createInstancedExportScene(data);
+  const scene = await createExpandedExportScene(data);
   const exporter = new GLTFExporter();
 
   try {
@@ -174,14 +172,9 @@ export async function createObjBlob(data: ExportInstanceData): Promise<Blob> {
   return new Blob(chunks, { type: 'text/plain;charset=utf-8' });
 }
 
-function createInstancedExportScene(data: ExportInstanceData): Scene {
+async function createExpandedExportScene(data: ExportInstanceData): Promise<Scene> {
   const scene = new Scene();
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new BufferAttribute(data.spherePositions.slice(), 3));
-  geometry.setAttribute('normal', new BufferAttribute(data.sphereNormals.slice(), 3));
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
-
+  const geometry = await createExpandedGeometry(data);
   const material = new MeshStandardMaterial({
     color: 0xffffff,
     roughness: clamp01(data.materialRoughness),
@@ -191,18 +184,67 @@ function createInstancedExportScene(data: ExportInstanceData): Scene {
   });
   material.name = 'DLA Age Gradient';
 
-  const mesh = new InstancedMesh(geometry, material, data.count);
+  const mesh = new Mesh(geometry, material);
   mesh.name = '260716_DLACoral';
-  mesh.instanceMatrix.array.set(data.matrices);
-  mesh.instanceMatrix.needsUpdate = true;
-  mesh.instanceColor = new InstancedBufferAttribute(createAgeGradientColors(data), 3);
-  mesh.instanceColor.needsUpdate = true;
-  mesh.rotation.y = data.seedRotationDegrees * DEG_TO_RAD;
-  mesh.count = data.count;
-  mesh.updateMatrix();
   mesh.updateMatrixWorld(true);
   scene.add(mesh);
   return scene;
+}
+
+async function createExpandedGeometry(data: ExportInstanceData): Promise<BufferGeometry> {
+  const vertexCount = data.spherePositions.length / 3;
+  const positions = new Float32Array(data.count * data.spherePositions.length);
+  const normals = new Float32Array(data.count * data.sphereNormals.length);
+  const colors = new Float32Array(data.count * data.spherePositions.length);
+  const particleColors = createAgeGradientColors(data);
+  const instancesPerBatch = Math.max(1, Math.floor(OBJ_ASYNC_VERTEX_BUDGET / vertexCount));
+  const objectMatrix = createObjectMatrix(data);
+  const instanceMatrix = new Matrix4();
+  const worldMatrix = new Matrix4();
+  const normalMatrix = new Matrix3();
+  const vertex = new Vector3();
+  const normal = new Vector3();
+
+  for (let instanceIndex = 0; instanceIndex < data.count; instanceIndex++) {
+    instanceMatrix.fromArray(data.matrices, instanceIndex * 16);
+    worldMatrix.multiplyMatrices(objectMatrix, instanceMatrix);
+    normalMatrix.getNormalMatrix(worldMatrix);
+    const colorOffset = instanceIndex * 3;
+    const targetBase = instanceIndex * data.spherePositions.length;
+
+    for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
+      const sourceOffset = vertexIndex * 3;
+      const targetOffset = targetBase + sourceOffset;
+      vertex
+        .fromArray(data.spherePositions, sourceOffset)
+        .applyMatrix4(worldMatrix);
+      normal
+        .fromArray(data.sphereNormals, sourceOffset)
+        .applyMatrix3(normalMatrix)
+        .normalize();
+      positions[targetOffset] = vertex.x;
+      positions[targetOffset + 1] = vertex.y;
+      positions[targetOffset + 2] = vertex.z;
+      normals[targetOffset] = normal.x;
+      normals[targetOffset + 1] = normal.y;
+      normals[targetOffset + 2] = normal.z;
+      colors[targetOffset] = particleColors[colorOffset];
+      colors[targetOffset + 1] = particleColors[colorOffset + 1];
+      colors[targetOffset + 2] = particleColors[colorOffset + 2];
+    }
+
+    if ((instanceIndex + 1) % instancesPerBatch === 0) {
+      await yieldToBrowser();
+    }
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new BufferAttribute(normals, 3));
+  geometry.setAttribute('color', new BufferAttribute(colors, 3));
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
 }
 
 function createObjectMatrix(data: ExportInstanceData): Matrix4 {
@@ -264,9 +306,6 @@ function disposeScene(scene: Scene): void {
       object.material.forEach((material) => material.dispose());
     } else {
       object.material.dispose();
-    }
-    if (object instanceof InstancedMesh) {
-      object.dispose();
     }
   });
 }

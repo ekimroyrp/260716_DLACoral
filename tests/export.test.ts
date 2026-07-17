@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { InstancedMesh, Matrix4, Vector3 } from 'three';
+import { Mesh } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import {
   createAgeGradientColors,
@@ -104,7 +104,7 @@ describe('model exports', () => {
     vi.unstubAllGlobals();
   });
 
-  it('writes GLB transforms and age colors with EXT_mesh_gpu_instancing', async () => {
+  it('writes expanded GLB sphere geometry and age colors without a required instancing extension', async () => {
     const blob = await createGlbBlob(exportData({
       matrices: translatedIdentityMatrices([0, 0, 0], [2, 3, 4]),
       birthRanks: new Float32Array([0, 1]),
@@ -117,26 +117,19 @@ describe('model exports', () => {
       seedRotationDegrees: 30,
     }));
     const json = parseGlbJson(await blob.arrayBuffer());
-    expect(json.extensionsUsed).toContain('EXT_mesh_gpu_instancing');
-    expect(json.extensionsRequired).toContain('EXT_mesh_gpu_instancing');
+    expect(json.extensionsUsed ?? []).not.toContain('EXT_mesh_gpu_instancing');
+    expect(json.extensionsRequired ?? []).not.toContain('EXT_mesh_gpu_instancing');
 
     const node = json.nodes.find(
       (candidate: { name?: string }) => candidate.name === '260716_DLACoral',
     );
-    const attributes = node.extensions.EXT_mesh_gpu_instancing.attributes;
-    expect(Object.keys(attributes)).toEqual(expect.arrayContaining([
-      'TRANSLATION',
-      'ROTATION',
-      'SCALE',
-      '_COLOR_0',
-    ]));
-    expect(json.accessors[attributes.TRANSLATION].count).toBe(2);
-    expect(json.accessors[attributes._COLOR_0].count).toBe(2);
-    expect(node.matrix).toHaveLength(16);
-    expect(Math.hypot(node.matrix[0], node.matrix[1], node.matrix[2])).toBeCloseTo(1, 6);
+    const attributes = json.meshes[node.mesh].primitives[0].attributes;
+    expect(json.accessors[attributes.POSITION].count).toBe(6);
+    expect(json.accessors[attributes.NORMAL].count).toBe(6);
+    expect(json.accessors[attributes.COLOR_0].count).toBe(6);
   });
 
-  it('round-trips every GLB sphere instance through a supporting glTF loader', async () => {
+  it('round-trips every GLB sphere as transformed standard mesh geometry', async () => {
     const blob = await createGlbBlob(exportData({
       matrices: translatedIdentityMatrices([0, 0, 0], [2, 3, 4], [-5, 1, 2]),
       birthRanks: new Float32Array([0, 1, 2]),
@@ -147,19 +140,21 @@ describe('model exports', () => {
       sphereNormals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
     }));
     const loaded = await new GLTFLoader().parseAsync(await blob.arrayBuffer(), '');
-    let instances: InstancedMesh | null = null;
+    let aggregate: Mesh | null = null;
     loaded.scene.traverse((object) => {
-      if (object instanceof InstancedMesh) {
-        instances = object;
+      if (object instanceof Mesh && object.name === '260716_DLACoral') {
+        aggregate = object;
       }
     });
-    expect(instances).not.toBeNull();
-    expect(instances!.count).toBe(3);
-    const position = new Vector3();
-    const matrix = new Matrix4();
-    instances!.getMatrixAt(2, matrix);
-    position.setFromMatrixPosition(matrix);
-    expect(position.toArray()).toEqual([-5, 1, 2]);
+    expect(aggregate).not.toBeNull();
+    const positions = aggregate!.geometry.getAttribute('position');
+    const colors = aggregate!.geometry.getAttribute('color');
+    expect(positions.count).toBe(9);
+    expect(colors.count).toBe(9);
+    expect([positions.getX(6), positions.getY(6), positions.getZ(6)]).toEqual([-5, 1, 2]);
+    expect(positions.getX(7)).toBeCloseTo(-4.2, 6);
+    expect(positions.getY(7)).toBe(1);
+    expect(positions.getZ(7)).toBe(2);
   });
 
   it('expands colored OBJ triangles with baked local scale and one global transform', async () => {
