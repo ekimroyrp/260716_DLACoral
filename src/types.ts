@@ -58,6 +58,7 @@ export interface DlaSettings {
   seedShape: SeedShape;
   seedRadius: number;
   targetParticles: number;
+  adaptiveStickNeighbors: boolean;
   attachmentNeighborhood: AttachmentNeighborhood;
   stickNeighbors: number;
   contactHits: number;
@@ -134,6 +135,7 @@ export const DEFAULT_DLA_SETTINGS: DlaSettings = {
   seedShape: 'point',
   seedRadius: 8,
   targetParticles: 1_000_000,
+  adaptiveStickNeighbors: true,
   attachmentNeighborhood: 'full26',
   stickNeighbors: 1,
   contactHits: 1,

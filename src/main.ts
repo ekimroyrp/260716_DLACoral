@@ -567,6 +567,7 @@ function enforceDeviceLimits(targetState: MutableAppState): void {
     maxParticles,
     Math.max(seedCount, Math.round(targetState.dla.targetParticles)),
   );
+  targetState.dla.adaptiveStickNeighbors = Boolean(targetState.dla.adaptiveStickNeighbors);
   targetState.dla.walkerPool = Math.min(
     limits.maxWalkers,
     Math.max(1, Math.round(targetState.dla.walkerPool)),

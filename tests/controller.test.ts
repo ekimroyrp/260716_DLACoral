@@ -139,6 +139,22 @@ describe('UI DLA and timeline invariants', () => {
     );
   });
 
+  it('enables Adaptive by default and applies it without resetting', () => {
+    const changes = vi.fn();
+    controller = createUiController({ onDlaChange: changes });
+    const adaptive = input('adaptive-stick-neighbors');
+
+    expect(controller.dla.adaptiveStickNeighbors).toBe(true);
+    expect(adaptive.checked).toBe(true);
+    adaptive.click();
+
+    expect(controller.dla.adaptiveStickNeighbors).toBe(false);
+    expect(changes).toHaveBeenCalledWith(
+      expect.objectContaining({ adaptiveStickNeighbors: false }),
+      expect.objectContaining({ source: 'adaptiveStickNeighbors', phase: 'commit', requiresReset: false }),
+    );
+  });
+
   it('activates value fields and toggles only when their control is clicked directly', () => {
     controller = createUiController();
     const seedField = input('seed-value');

@@ -17,7 +17,7 @@ import {
 
 const WORKGROUP_SIZE = 128;
 const PARAM_WORDS = 32;
-const COUNTER_WORDS = 9;
+const COUNTER_WORDS = 10;
 const HASH_ENTRY_BYTES = 16;
 const WALKER_BYTES = 32;
 const CANDIDATE_BYTES = 32;
@@ -622,6 +622,7 @@ export class GpuDlaSimulator {
     u32[21] = MAX_HASH_PROBES;
     u32[22] = Number(this.device.limits.maxComputeWorkgroupsPerDimension) * WORKGROUP_SIZE;
     u32[23] = settings.bootstrapParticles;
+    u32[24] = settings.adaptiveStickNeighbors ? 1 : 0;
     this.device.queue.writeBuffer(state.buffers.params, 0, values);
   }
 
@@ -991,6 +992,7 @@ function normalizeSettings(settings: DlaSettings, particleCapacity: number, walk
     ),
     contactHits: clampInteger(settings.contactHits, 1, 1_000_000),
     bootstrapParticles: clampInteger(settings.bootstrapParticles, 0, particleCapacity),
+    adaptiveStickNeighbors: Boolean(settings.adaptiveStickNeighbors),
     stickChance: Math.max(0, Math.min(1, settings.stickChance)),
     launchPadding: clampInteger(settings.launchPadding, 1, 1024),
     killPadding: clampInteger(settings.killPadding, 1, 4096),
@@ -1113,6 +1115,7 @@ struct Counters {
   overflow: atomic<u32>,
   hashEntries: atomic<u32>,
   newestVisibleBirth: atomic<u32>,
+  maxCandidateNeighbors: atomic<u32>,
 };
 
 struct Params {
@@ -1140,7 +1143,7 @@ struct Params {
   maxHashProbes: u32,
   clearThreads: u32,
   bootstrapParticles: u32,
-  pad2: u32,
+  adaptiveStickNeighbors: u32,
   pad3: u32,
   pad4: u32,
   pad5: u32,
@@ -1587,6 +1590,7 @@ fn clearCandidates() {
   atomicStore(&counters.candidateCount, 0u);
   atomicStore(&counters.attachedThisStep, 0u);
   atomicStore(&counters.epoch, params.epoch);
+  atomicStore(&counters.maxCandidateNeighbors, 0u);
 }
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
@@ -1633,7 +1637,7 @@ fn advanceWalkers(@builtin(global_invocation_id) id: vec3<u32>) {
       1u,
       attachedCount < params.bootstrapParticles
     );
-    if (count < requiredNeighbors) {
+    if (params.adaptiveStickNeighbors == 0u && count < requiredNeighbors) {
       continue;
     }
     let roll = u32(randomFloat(&rng) * 1000000.0);
@@ -1645,6 +1649,7 @@ fn advanceWalkers(@builtin(global_invocation_id) id: vec3<u32>) {
     candidates[walkerIndex].neighborCount = count;
     candidates[walkerIndex].rank = walkerIndex;
     atomicAdd(&counters.candidateCount, 1u);
+    atomicMax(&counters.maxCandidateNeighbors, count);
     position = launchPosition(&rng);
     contactHits = 0u;
     break;
@@ -1658,15 +1663,22 @@ fn commitCandidates() {
   var particleCount = atomicLoad(&counters.particleCount);
   var attached = 0u;
   let limit = min(params.growthBatch, params.targetParticles - min(params.targetParticles, particleCount));
+  let attainable = atomicLoad(&counters.maxCandidateNeighbors);
+  let adaptiveRequiredNeighbors = max(1u, min(params.stickNeighbors, attainable));
   for (var walkerIndex = 0u; walkerIndex < params.walkerCount && attached < limit; walkerIndex = walkerIndex + 1u) {
     if (candidates[walkerIndex].valid == 0u || particleCount >= params.particleCapacity) {
       continue;
     }
     let attachedCount = particleCount - params.seedCount;
-    let requiredNeighbors = select(
+    let strictRequiredNeighbors = select(
       params.stickNeighbors,
       1u,
       attachedCount < params.bootstrapParticles
+    );
+    let requiredNeighbors = select(
+      strictRequiredNeighbors,
+      adaptiveRequiredNeighbors,
+      params.adaptiveStickNeighbors == 1u
     );
     if (candidates[walkerIndex].neighborCount < requiredNeighbors) {
       continue;

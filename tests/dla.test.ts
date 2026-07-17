@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SparseCellHash,
   MAX_COMPACT_SEED_RADIUS,
+  adaptiveStickThreshold,
   buildNeighborMetadata,
   colorAtBirth,
   countSeedPositions,
@@ -240,6 +241,13 @@ describe('DLA candidate and batch rules', () => {
         },
       ).accepted,
     ).toBe(true);
+  });
+
+  it('caps the adaptive threshold at the best score attained in the current epoch', () => {
+    expect(adaptiveStickThreshold(5, 0)).toBe(1);
+    expect(adaptiveStickThreshold(5, 1)).toBe(1);
+    expect(adaptiveStickThreshold(5, 3)).toBe(3);
+    expect(adaptiveStickThreshold(5, 8)).toBe(5);
   });
 
   it('makes Growth Batch 1 strict and larger batches bounded and de-duplicated', () => {

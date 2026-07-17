@@ -2,6 +2,7 @@ export {
   SparseCellHash,
   HASH_COORD_MAX,
   HASH_COORD_MIN,
+  adaptiveStickThreshold,
   buildNeighborMetadata,
   cellKey,
   colorAtBirth,

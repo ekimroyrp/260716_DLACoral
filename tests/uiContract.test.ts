@@ -111,6 +111,9 @@ describe('first-version UI contract', () => {
       ['randomized', 'Randomized Neighborhood'],
     ]);
     expect(requiredSelect('attachment-neighborhood').value).toBe('full26');
+    expect(requiredInput('adaptive-stick-neighbors').checked).toBe(true);
+    const adaptiveLabel = requiredInput('adaptive-stick-neighbors').closest('label');
+    expect(adaptiveLabel?.previousElementSibling?.querySelector('#attachment-neighborhood')).not.toBeNull();
     expect(requiredInput('inner-color').value).toBe('#ac2a4a');
     expect(requiredInput('outer-color').value).toBe('#ffffff');
     const swatches = document.querySelector('.gradient-swatches');
@@ -163,11 +166,9 @@ describe('first-version UI contract', () => {
     expect(document.getElementById('sphere-detail')).toBeNull();
     expect(document.getElementById('global-scale')).toBeNull();
     expect(document.getElementById('local-scale')).toBeNull();
-    expect(document.getElementById('stick-neighbors-help')?.textContent).toBe(
-      'Required neighborhood score after the bootstrap period.',
-    );
-    expect(requiredInput('stick-neighbors').getAttribute('aria-describedby')).toBe('stick-neighbors-help');
-    expect(requiredInput('stick-neighbors-value').getAttribute('aria-describedby')).toBe('stick-neighbors-help');
+    expect(document.getElementById('stick-neighbors-help')).toBeNull();
+    expect(requiredInput('stick-neighbors').getAttribute('aria-describedby')).toBeNull();
+    expect(requiredInput('stick-neighbors-value').getAttribute('aria-describedby')).toBeNull();
     expect(document.querySelector('.control-hint')?.textContent).toBe(
       'Particle Count = 1',
     );

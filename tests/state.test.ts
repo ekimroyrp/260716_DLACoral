@@ -7,6 +7,7 @@ describe('app state snapshots', () => {
     expect(state.dla.particleSize).toBe(1);
     expect(state.dla.particleScale).toBe(1);
     expect(state.dla.particleResolution).toBe(2);
+    expect(state.dla.adaptiveStickNeighbors).toBe(true);
     expect(state.dla.contactHits).toBe(1);
     expect(state.dla.bootstrapParticles).toBe(50);
     expect(state.display.gradientContrast).toBe(1.37);

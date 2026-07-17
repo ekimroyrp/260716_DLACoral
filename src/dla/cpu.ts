@@ -51,6 +51,13 @@ export function stickThresholdForGrowth(
   return attached < bootstrap ? 1 : preferred;
 }
 
+/** Matches the legacy per-epoch threshold: prefer the request, but never exceed what candidates attained. */
+export function adaptiveStickThreshold(requested: number, attainable: number): number {
+  const preferred = Math.max(1, Math.floor(Number.isFinite(requested) ? requested : 1));
+  const available = Math.max(0, Math.floor(Number.isFinite(attainable) ? attainable : 0));
+  return Math.max(1, Math.min(preferred, available));
+}
+
 export function hash32(value: number): number {
   let next = value >>> 0;
   next = (next ^ (next >>> 16)) >>> 0;

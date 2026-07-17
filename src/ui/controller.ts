@@ -116,6 +116,7 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
   const exportGlb = requiredElement('export-glb', HTMLButtonElement);
   const exportObj = requiredElement('export-obj', HTMLButtonElement);
   const screenshot = requiredElement('screenshot', HTMLButtonElement);
+  const adaptiveStickNeighbors = requiredElement('adaptive-stick-neighbors', HTMLInputElement);
   const hideEnclosed = requiredElement('hide-enclosed', HTMLInputElement);
   const innerColor = requiredElement('inner-color', HTMLInputElement);
   const outerColor = requiredElement('outer-color', HTMLInputElement);
@@ -724,6 +725,11 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     });
   };
 
+  bindToggle(adaptiveStickNeighbors, 'Adaptive', (checked) => {
+    dla.adaptiveStickNeighbors = checked;
+    emitDlaChange('adaptiveStickNeighbors', 'commit');
+  });
+
   bindToggle(hideEnclosed, 'Hide Enclosed', (checked) => {
     dla.hideEnclosed = checked;
     emitDlaChange('hideEnclosed', 'commit');
@@ -929,6 +935,7 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     killPaddingControl.set(dla.killPadding);
     growthBatchControl.set(dla.growthBatch);
     walkerPoolControl.set(dla.walkerPool);
+    adaptiveStickNeighbors.checked = dla.adaptiveStickNeighbors;
     hideEnclosed.checked = dla.hideEnclosed;
 
     innerColor.value = display.innerColor;
