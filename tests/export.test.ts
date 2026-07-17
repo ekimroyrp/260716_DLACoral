@@ -4,6 +4,7 @@ import {
   createDisplayColor,
   createGlbBlob,
   createObjBlob,
+  shapeAgeGradient,
   type ExportInstanceData,
 } from '../src/render';
 import { displayedGradientCount } from '../src/render/dlaRenderer';
@@ -17,10 +18,12 @@ function exportData(overrides: Partial<ExportInstanceData> = {}): ExportInstance
     gradientCount: 5,
     spherePositions: new Float32Array(9),
     sphereNormals: new Float32Array(9),
-    sphereScale: 1,
-    rotationDegrees: 0,
+    seedRotationDegrees: 0,
     innerColor: '#000000',
     outerColor: '#ffffff',
+    gradientContrast: 1,
+    gradientBias: 0,
+    gradientBlur: 0,
     brightness: 1,
     contrast: 1,
     materialRoughness: 0.92,
@@ -40,6 +43,18 @@ describe('export age colors', () => {
     const colors = createAgeGradientColors(exportData());
     expect([...colors.slice(0, 6)]).toEqual([0, 0, 0, 0, 0, 0]);
     expect([...colors.slice(12, 15)]).toEqual([1, 1, 1]);
+  });
+
+  it('keeps seed albedo exactly at Gradient Start regardless of image grading', () => {
+    const colors = createAgeGradientColors(exportData({
+      innerColor: '#ac2a4a',
+      brightness: 10,
+      contrast: 10,
+    }));
+    expect(colors[0]).toBeCloseTo(0xac / 0xff, 6);
+    expect(colors[1]).toBeCloseTo(0x2a / 0xff, 6);
+    expect(colors[2]).toBeCloseTo(0x4a / 0xff, 6);
+    expect([...colors.slice(0, 3)]).toEqual([...colors.slice(3, 6)]);
   });
 
   it('interpolates attached birth ranks and clamps display grading', () => {
@@ -62,6 +77,20 @@ describe('export age colors', () => {
     }));
     expect([...colors.slice(6, 9)]).toEqual([1, 1, 1]);
   });
+
+  it('matches the reference gradient curve while preserving exact endpoints', () => {
+    expect(shapeAgeGradient(0, 1.37, -0.74, 0.45)).toBe(0);
+    expect(shapeAgeGradient(0.5, 1.37, -0.74, 0.45)).toBeCloseTo(0.225, 6);
+    expect(shapeAgeGradient(1, 1.37, -0.74, 0.45)).toBe(1);
+
+    const colors = createAgeGradientColors(exportData({
+      gradientContrast: 1.37,
+      gradientBias: -0.74,
+      gradientBlur: 0.45,
+    }));
+    expect([...colors.slice(0, 6)]).toEqual([0, 0, 0, 0, 0, 0]);
+    expect([...colors.slice(12, 15)]).toEqual([1, 1, 1]);
+  });
 });
 
 describe('model exports', () => {
@@ -80,10 +109,10 @@ describe('model exports', () => {
       count: 2,
       seedCount: 1,
       gradientCount: 2,
-      spherePositions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      // Particle Size and Particle Scale are already baked into the geometry.
+      spherePositions: new Float32Array([0, 0, 0, 0.8, 0, 0, 0, 0.8, 0]),
       sphereNormals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
-      sphereScale: 0.75,
-      rotationDegrees: 30,
+      seedRotationDegrees: 30,
     }));
     const json = parseGlbJson(await blob.arrayBuffer());
     expect(json.extensionsUsed).toContain('EXT_mesh_gpu_instancing');
@@ -102,17 +131,18 @@ describe('model exports', () => {
     expect(json.accessors[attributes.TRANSLATION].count).toBe(2);
     expect(json.accessors[attributes._COLOR_0].count).toBe(2);
     expect(node.matrix).toHaveLength(16);
-    expect(Math.hypot(node.matrix[0], node.matrix[1], node.matrix[2])).toBeCloseTo(0.75, 6);
+    expect(Math.hypot(node.matrix[0], node.matrix[1], node.matrix[2])).toBeCloseTo(1, 6);
   });
 
-  it('expands every displayed sphere into colored OBJ triangles', async () => {
+  it('expands colored OBJ triangles with baked local scale and one global transform', async () => {
     const blob = await createObjBlob(exportData({
       matrices: translatedIdentityMatrices([0, 0, 0], [2, 0, 0]),
       birthRanks: new Float32Array([0, 1]),
       count: 2,
       seedCount: 1,
       gradientCount: 2,
-      spherePositions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      // The exported geometry has already received Particle Size and Particle Scale.
+      spherePositions: new Float32Array([0, 0, 0, 0.8, 0, 0, 0, 0.8, 0]),
       sphereNormals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
     }));
     const lines = (await blob.text()).trim().split('\n');
@@ -120,6 +150,7 @@ describe('model exports', () => {
     expect(lines.filter((line) => line.startsWith('vn '))).toHaveLength(6);
     expect(lines.filter((line) => line.startsWith('f '))).toHaveLength(2);
     expect(lines.find((line) => line.startsWith('v 0 0 0 '))).toBe('v 0 0 0 0 0 0');
+    expect(lines.find((line) => line.startsWith('v 0.8 0 0 '))).toBe('v 0.8 0 0 0 0 0');
     expect(lines.find((line) => line.startsWith('v 2 0 0 '))).toBe('v 2 0 0 1 1 1');
   });
 });

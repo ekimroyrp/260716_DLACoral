@@ -16,6 +16,7 @@ export {
   isFullyEnclosed,
   isOutsideKillRadius,
   maxSeedRadiusForCapacity,
+  seedLatticeRadius,
   nextPowerOfTwo,
   packCellKey,
   selectGrowthBatch,

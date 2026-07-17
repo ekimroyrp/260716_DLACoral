@@ -124,6 +124,10 @@ describe('ActionHistory', () => {
       ),
     ).toBe(false);
 
+    const particleScaleAfter = snapshot(10, 10, 'Particle Scale');
+    particleScaleAfter.dla.particleScale = 1.4;
+    expect(areHistorySnapshotsEquivalent(snapshot(10, 10, 'Particle Scale'), particleScaleAfter)).toBe(false);
+
     const structuralBefore = {
       ...snapshot(10, 25, 'Reset Simulation'),
       aggregate: { currentCount: 11, latestCount: 26, branchSerial: 0, rngState: 1 },

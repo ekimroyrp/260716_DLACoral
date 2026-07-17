@@ -17,6 +17,7 @@ import {
   packCellKey,
   projectedSparseHashCapacity,
   selectGrowthBatch,
+  seedLatticeRadius,
   uniformSphereLaunch,
   unpackCellKey,
 } from '../src/dla';
@@ -43,6 +44,23 @@ describe('DLA seed generation', () => {
     const seed = generateSeedPositions('ring', 7);
     expect(seed.length).toBeGreaterThan(20);
     expect(seed.every(({ y }) => y === 0)).toBe(true);
+  });
+
+  it('packs a fixed-radius seed with more smaller particles and fewer larger particles', () => {
+    const smallCount = countSeedPositions('ring', 8, 0.5);
+    const defaultCount = countSeedPositions('ring', 8, 1);
+    const largeCount = countSeedPositions('ring', 8, 2);
+    expect(smallCount).toBeGreaterThan(defaultCount);
+    expect(defaultCount).toBeGreaterThan(largeCount);
+    expect(seedLatticeRadius(8, 0.5)).toBe(16);
+    expect(seedLatticeRadius(8, 2)).toBe(4);
+
+    for (const particleSize of [0.5, 1, 2]) {
+      const seed = generateSeedPositions('ring', 8, particleSize);
+      const worldRadii = seed.map(({ x, z }) => Math.hypot(x, z) * particleSize);
+      expect(Math.max(...worldRadii.map((radius) => Math.abs(radius - 8))))
+        .toBeLessThanOrEqual(particleSize * 0.51);
+    }
   });
 
   it('keeps larger shell generation deterministic and unique', () => {

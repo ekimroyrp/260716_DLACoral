@@ -135,12 +135,18 @@ export function evaluateCandidate(
   };
 }
 
-export function generateSeedPositions(shape: SeedShape, radius = 1): Int3[] {
+export function seedLatticeRadius(radius: number, particleSize = 1): number {
+  const safeRadius = Number.isFinite(radius) ? radius : 1;
+  const safeParticleSize = Math.max(0.001, Number.isFinite(particleSize) ? particleSize : 1);
+  return Math.max(1, Math.round(safeRadius / safeParticleSize));
+}
+
+export function generateSeedPositions(shape: SeedShape, radius = 1, particleSize = 1): Int3[] {
   if (shape === 'point') {
     return [{ x: 0, y: 0, z: 0 }];
   }
 
-  const r = normalizeSeedRadius(radius);
+  const r = seedLatticeRadius(radius, particleSize);
   const innerSq = (r - 0.5) ** 2;
   const outerSq = (r + 0.5) ** 2;
   const positions: Int3[] = [];
@@ -162,12 +168,12 @@ export function generateSeedPositions(shape: SeedShape, radius = 1): Int3[] {
 }
 
 /** Exact seed size without allocating per-cell objects. */
-export function countSeedPositions(shape: SeedShape, radius = 1): number {
+export function countSeedPositions(shape: SeedShape, radius = 1, particleSize = 1): number {
   if (shape === 'point') {
     return 1;
   }
 
-  const r = normalizeSeedRadius(radius);
+  const r = seedLatticeRadius(radius, particleSize);
   const innerSq = (r - 0.5) ** 2;
   const outerSq = (r + 0.5) ** 2;
   let count = 0;
@@ -191,8 +197,10 @@ export function maxSeedRadiusForCapacity(
   shape: SeedShape,
   particleCapacity: number,
   latticeMaximum: number,
+  particleSize = 1,
 ): number {
-  const maximum = Math.max(1, Math.floor(latticeMaximum));
+  const safeParticleSize = Math.max(0.001, Number.isFinite(particleSize) ? particleSize : 1);
+  const maximum = Math.max(1, Math.floor(latticeMaximum * safeParticleSize));
   if (shape === 'point') {
     return maximum;
   }
@@ -202,7 +210,7 @@ export function maxSeedRadiusForCapacity(
   let result = 1;
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
-    if (countSeedPositions(shape, middle) <= capacity) {
+    if (countSeedPositions(shape, middle, safeParticleSize) <= capacity) {
       result = middle;
       low = middle + 1;
     } else {
@@ -253,10 +261,6 @@ function shellXCount(innerSq: number, outerSq: number, yzDistanceSq: number): nu
     return maxX * 2 + 1;
   }
   return minAbsX <= maxX ? (maxX - minAbsX + 1) * 2 : 0;
-}
-
-function normalizeSeedRadius(radius: number): number {
-  return Math.max(1, Math.floor(Number.isFinite(radius) ? radius : 1));
 }
 
 export function uniformSphereLaunch(seed: number, walkerIndex: number, radius: number): Int3 {

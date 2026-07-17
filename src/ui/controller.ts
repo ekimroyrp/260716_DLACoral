@@ -52,9 +52,9 @@ export interface UiController {
   sync(snapshot: Partial<Pick<AppSnapshot, 'simulation' | 'dla' | 'display'>>): void;
   setRunning(running: boolean): void;
   setTimeline(value: number, latest: number): void;
-  setParticleCount(count: number, target?: number): void;
-  setRotation(rotation: number): void;
-  setBusy(message: string): void;
+  setParticleCount(count: number): void;
+  setSeedRotation(rotation: number): void;
+  setBusy(): void;
   setReady(): void;
   setError(message: string): void;
   beginTransaction(label: string): void;
@@ -110,7 +110,7 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
   const startButton = requiredElement('start-sim', HTMLButtonElement);
   const resetButton = requiredElement('reset-sim', HTMLButtonElement);
   const particleCountNote = requiredElement('particle-count-note', HTMLElement);
-  const status = requiredElement('status-overlay', HTMLElement);
+  const fatalErrorNote = requiredElement('fatal-error-note', HTMLElement);
   const exportGlb = requiredElement('export-glb', HTMLButtonElement);
   const exportObj = requiredElement('export-obj', HTMLButtonElement);
   const screenshot = requiredElement('screenshot', HTMLButtonElement);
@@ -342,6 +342,66 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     },
   });
 
+  const seedRotationControl = bindNumericControl({
+    id: 'seed-rotation',
+    label: 'Seed Rotation',
+    decimals: 0,
+    integer: true,
+    emitOnInput: true,
+    onValue(value, phase) {
+      dla.seedRotation = value;
+      emitDlaChange('seedRotation', phase);
+    },
+  });
+
+  const particleSizeControl = bindNumericControl({
+    id: 'particle-size',
+    label: 'Particle Size',
+    decimals: 2,
+    sanitize: (value) => Math.max(0.01, value),
+    onValue(value, phase) {
+      dla.particleSize = value;
+      emitDlaChange('particleSize', phase, true);
+    },
+  });
+
+  const particleGapControl = bindNumericControl({
+    id: 'particle-gap',
+    label: 'Particle Gap',
+    decimals: 2,
+    emitOnInput: true,
+    sanitize: (value) => Math.max(0, value),
+    onValue(value, phase) {
+      dla.particleGap = value;
+      emitDlaChange('particleGap', phase);
+    },
+  });
+
+  const particleScaleControl = bindNumericControl({
+    id: 'particle-scale',
+    label: 'Particle Scale',
+    decimals: 2,
+    emitOnInput: true,
+    sanitize: (value) => Math.max(0.01, value),
+    onValue(value, phase) {
+      dla.particleScale = value;
+      emitDlaChange('particleScale', phase);
+    },
+  });
+
+  const particleResolutionControl = bindNumericControl({
+    id: 'particle-resolution',
+    label: 'Particle Resolution',
+    decimals: 0,
+    integer: true,
+    extendBounds: false,
+    sanitize: (value) => clamp(value, 0, 2),
+    onValue(value, phase) {
+      dla.particleResolution = value;
+      emitDlaChange('particleResolution', phase);
+    },
+  });
+
   const targetParticlesControl = bindNumericControl({
     id: 'target-particles',
     label: 'Target Particles',
@@ -428,55 +488,16 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     },
   });
 
-  const rotationControl = bindNumericControl({
-    id: 'rotation',
-    label: 'Rotation',
-    decimals: 0,
-    integer: true,
-    emitOnInput: true,
-    onValue(value, phase) {
-      dla.rotation = value;
-      emitDlaChange('rotation', phase);
-    },
-  });
-
-  const sphereScaleControl = bindNumericControl({
-    id: 'sphere-scale',
-    label: 'Sphere Scale',
-    decimals: 2,
-    emitOnInput: true,
-    sanitize: (value) => Math.max(0.01, value),
-    onValue(value, phase) {
-      dla.sphereScale = value;
-      emitDlaChange('sphereScale', phase);
-    },
-  });
-
-  const sphereGapControl = bindNumericControl({
-    id: 'sphere-gap',
-    label: 'Sphere Gap',
-    decimals: 2,
-    emitOnInput: true,
-    onValue(value, phase) {
-      dla.sphereGap = value;
-      emitDlaChange('sphereGap', phase);
-    },
-  });
-
-  const sphereDetailControl = bindNumericControl({
-    id: 'sphere-detail',
-    label: 'Sphere Detail',
-    decimals: 0,
-    integer: true,
-    extendBounds: false,
-    sanitize: (value) => clamp(value, 0, 2),
-    onValue(value, phase) {
-      dla.sphereDetail = value;
-      emitDlaChange('sphereDetail', phase);
-    },
-  });
-
   const displayControls = {
+    gradientContrast: bindDisplayNumber('gradient-contrast', 'Gradient Contrast', 2, (value) => {
+      display.gradientContrast = value;
+    }),
+    gradientBias: bindDisplayNumber('gradient-bias', 'Gradient Bias', 2, (value) => {
+      display.gradientBias = value;
+    }),
+    gradientBlur: bindDisplayNumber('gradient-blur', 'Gradient Blur', 2, (value) => {
+      display.gradientBlur = value;
+    }),
     lightAzimuth: bindDisplayNumber('light-azimuth', 'Light Azimuth', 2, (value) => {
       display.lightAzimuth = value;
     }),
@@ -687,10 +708,10 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     listen(input, 'blur', () => transaction.commit());
   };
 
-  bindColor(innerColor, 'Inner Color', 'innerColor', (value) => {
+  bindColor(innerColor, 'Gradient Start', 'innerColor', (value) => {
     display.innerColor = value;
   });
-  bindColor(outerColor, 'Outer Color', 'outerColor', (value) => {
+  bindColor(outerColor, 'Gradient End', 'outerColor', (value) => {
     display.outerColor = value;
   });
 
@@ -850,6 +871,11 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     seedControl.set(dla.seed);
     seedShapeSelect.set(dla.seedShape);
     seedRadiusControl.set(dla.seedRadius);
+    seedRotationControl.set(dla.seedRotation);
+    particleSizeControl.set(dla.particleSize);
+    particleGapControl.set(dla.particleGap);
+    particleScaleControl.set(dla.particleScale);
+    particleResolutionControl.set(dla.particleResolution);
     targetParticlesControl.set(dla.targetParticles);
     attachmentNeighborhoodSelect.set(String(dla.attachmentNeighborhood));
     stickNeighborsControl.setMaximum(dla.attachmentNeighborhood);
@@ -859,14 +885,13 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     killPaddingControl.set(dla.killPadding);
     growthBatchControl.set(dla.growthBatch);
     walkerPoolControl.set(dla.walkerPool);
-    rotationControl.set(dla.rotation);
-    sphereScaleControl.set(dla.sphereScale);
-    sphereGapControl.set(dla.sphereGap);
-    sphereDetailControl.set(dla.sphereDetail);
     hideEnclosed.checked = dla.hideEnclosed;
 
     innerColor.value = display.innerColor;
     outerColor.value = display.outerColor;
+    displayControls.gradientContrast.set(display.gradientContrast);
+    displayControls.gradientBias.set(display.gradientBias);
+    displayControls.gradientBlur.set(display.gradientBlur);
     displayControls.lightAzimuth.set(display.lightAzimuth);
     displayControls.lightElevation.set(display.lightElevation);
     displayControls.keyBrightness.set(display.keyBrightness);
@@ -901,7 +926,7 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
   }
 
   function updateParticleCountNote(): void {
-    particleCountNote.textContent = `Particles = ${formatCount(currentParticleCount)} / ${formatCount(dla.targetParticles)}`;
+    particleCountNote.textContent = `Particle Count = ${formatCount(currentParticleCount)}`;
   }
 
   function setRunning(running: boolean): void {
@@ -916,10 +941,8 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     timelineControl.set(simulation.timeline);
   }
 
-  function setBusy(message: string): void {
+  function setBusy(): void {
     busy = true;
-    status.textContent = message;
-    status.className = message ? 'is-visible' : '';
     [startButton, resetButton, exportGlb, exportObj, screenshot].forEach((button) => {
       button.disabled = true;
     });
@@ -928,8 +951,8 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
 
   function setReady(): void {
     busy = false;
-    status.textContent = '';
-    status.className = '';
+    fatalErrorNote.textContent = '';
+    fatalErrorNote.hidden = true;
     [startButton, resetButton, exportGlb, exportObj, screenshot].forEach((button) => {
       button.disabled = false;
     });
@@ -967,22 +990,19 @@ export function createUiController(callbacks: UiControllerCallbacks = {}): UiCon
     },
     setRunning,
     setTimeline,
-    setParticleCount(count: number, target?: number): void {
+    setParticleCount(count: number): void {
       currentParticleCount = Math.max(0, Math.round(count));
-      if (target !== undefined) {
-        dla.targetParticles = targetParticlesControl.set(Math.max(1, Math.round(target)));
-      }
       updateParticleCountNote();
     },
-    setRotation(rotation: number): void {
-      dla.rotation = rotationControl.set(rotation);
+    setSeedRotation(rotation: number): void {
+      dla.seedRotation = seedRotationControl.set(rotation);
     },
     setBusy,
     setReady,
     setError(message: string): void {
       busy = false;
-      status.textContent = message;
-      status.className = 'is-visible is-error';
+      fatalErrorNote.textContent = message;
+      fatalErrorNote.hidden = false;
       [startButton, resetButton, exportGlb, exportObj, screenshot].forEach((button) => {
         button.disabled = false;
       });

@@ -5,6 +5,11 @@ const rendererSource = readFileSync('src/render/dlaRenderer.ts', 'utf8');
 const mainSource = readFileSync('src/main.ts', 'utf8');
 
 describe('camera ownership', () => {
+  it('starts at four times the base camera-to-target distance, twice the prior default', () => {
+    expect(rendererSource).toContain('const INITIAL_CAMERA_ZOOM_OUT = 4;');
+    expect(rendererSource).toContain('initialTargetY + (initialCameraY - initialTargetY) * INITIAL_CAMERA_ZOOM_OUT');
+  });
+
   it('assigns camera pose and orbit target only during renderer construction', () => {
     const constructorStart = rendererSource.indexOf('  constructor(');
     const constructorEnd = rendererSource.indexOf('\n  async init(', constructorStart);

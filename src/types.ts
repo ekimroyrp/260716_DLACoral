@@ -20,16 +20,20 @@ export interface DlaSettings {
   killPadding: number;
   growthBatch: number;
   walkerPool: number;
-  rotation: number;
-  sphereScale: number;
-  sphereGap: number;
-  sphereDetail: number;
+  seedRotation: number;
+  particleSize: number;
+  particleGap: number;
+  particleScale: number;
+  particleResolution: number;
   hideEnclosed: boolean;
 }
 
 export interface DisplaySettings {
   innerColor: string;
   outerColor: string;
+  gradientContrast: number;
+  gradientBias: number;
+  gradientBlur: number;
   lightAzimuth: number;
   lightElevation: number;
   keyBrightness: number;
@@ -90,31 +94,35 @@ export const DEFAULT_DLA_SETTINGS: DlaSettings = {
   killPadding: 3,
   growthBatch: 256,
   walkerPool: 65_536,
-  rotation: 0,
-  sphereScale: 1,
-  sphereGap: 0,
-  sphereDetail: 0,
+  seedRotation: 0,
+  particleSize: 1,
+  particleGap: 0,
+  particleScale: 1,
+  particleResolution: 2,
   hideEnclosed: true,
 };
 
 export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {
-  innerColor: '#6b2f24',
-  outerColor: '#f4e6d2',
-  lightAzimuth: 25.65,
-  lightElevation: 68.7,
-  keyBrightness: 2.41,
-  ambientFill: 0.3,
+  innerColor: '#ac2a4a',
+  outerColor: '#ffffff',
+  gradientContrast: 1.37,
+  gradientBias: -0.74,
+  gradientBlur: 0.45,
+  lightAzimuth: -3.08,
+  lightElevation: 55.79,
+  keyBrightness: 3.37,
+  ambientFill: 0.8,
   rimBrightness: 0.49,
-  bounceBrightness: 0.07,
-  shadowStrength: 1.08,
-  shadowSoftness: 2.6,
-  exposure: 0.7,
-  brightness: 1,
-  contrast: 2.25,
-  roughness: 0.92,
-  bloomStrength: 0.08,
-  bloomRadius: 0.26,
-  bloomThreshold: 0,
+  bounceBrightness: 0.45,
+  shadowStrength: 1.13,
+  shadowSoftness: 2.09,
+  exposure: 0.68,
+  brightness: 1.15,
+  contrast: 2.55,
+  roughness: 0,
+  bloomStrength: 0.13,
+  bloomRadius: 0.24,
+  bloomThreshold: 0.19,
 };
 
 export const MAX_HISTORY_ACTIONS = 120;

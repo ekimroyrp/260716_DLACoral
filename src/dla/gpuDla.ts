@@ -1,5 +1,12 @@
 import type { DlaSettings, DlaSnapshot, Int3 } from '../types';
-import { HASH_COORD_MAX, HASH_COORD_MIN, countSeedPositions, generateSeedPositions, nextPowerOfTwo } from './cpu';
+import {
+  HASH_COORD_MAX,
+  HASH_COORD_MIN,
+  countSeedPositions,
+  generateSeedPositions,
+  nextPowerOfTwo,
+  seedLatticeRadius,
+} from './cpu';
 
 const WORKGROUP_SIZE = 128;
 const PARAM_WORDS = 32;
@@ -257,17 +264,24 @@ export class GpuDlaSimulator {
     return this.enqueue(async () => {
       await this.pipelineReady;
       this.assertReady();
-      if (settings.seedShape !== 'point' && Math.floor(settings.seedRadius) > MAX_COMPACT_SEED_RADIUS) {
-        throw new Error(`Seed Radius cannot exceed ${MAX_COMPACT_SEED_RADIUS} on the compact WebGPU lattice.`);
+      if (
+        settings.seedShape !== 'point'
+        && seedLatticeRadius(settings.seedRadius, settings.particleSize) > MAX_COMPACT_SEED_RADIUS
+      ) {
+        throw new Error('The selected Particle Size makes Seed Radius exceed the compact WebGPU lattice capacity.');
       }
       const particleCapacity = this.resolveParticleCapacity(settings, targets, 1);
-      const requiredSeedParticles = countSeedPositions(settings.seedShape, settings.seedRadius);
+      const requiredSeedParticles = countSeedPositions(
+        settings.seedShape,
+        settings.seedRadius,
+        settings.particleSize,
+      );
       if (requiredSeedParticles > particleCapacity) {
         throw new Error(
           `The selected seed requires ${requiredSeedParticles} particles, but the renderer/device capacity is ${particleCapacity}.`,
         );
       }
-      const seedPositions = generateSeedPositions(settings.seedShape, settings.seedRadius);
+      const seedPositions = generateSeedPositions(settings.seedShape, settings.seedRadius, settings.particleSize);
       this.disposeActive();
       const seedCount = seedPositions.length;
       const hashCapacity = this.resolveHashCapacity(seedCount, particleCapacity);
@@ -596,8 +610,7 @@ export class GpuDlaSimulator {
     u32[16] = settings.hideEnclosed ? 1 : 0;
     u32[17] = settings.targetParticles;
     u32[18] = state.epoch;
-    f32[19] = settings.sphereScale;
-    f32[20] = settings.sphereGap;
+    f32[19] = Math.max(0.001, settings.particleSize);
     u32[21] = MAX_HASH_PROBES;
     u32[22] = Number(this.device.limits.maxComputeWorkgroupsPerDimension) * WORKGROUP_SIZE;
     this.device.queue.writeBuffer(state.buffers.params, 0, values);
@@ -966,8 +979,10 @@ function normalizeSettings(settings: DlaSettings, particleCapacity: number, walk
     killPadding: clampInteger(settings.killPadding, 1, 4096),
     growthBatch: clampInteger(settings.growthBatch, 1, 65_536),
     walkerPool: clampInteger(settings.walkerPool, 1, walkerCapacity),
-    sphereScale: Math.max(0.001, settings.sphereScale),
-    sphereGap: Math.max(0, settings.sphereGap),
+    particleSize: Math.max(0.001, settings.particleSize),
+    particleScale: Math.max(0.001, settings.particleScale),
+    particleGap: Math.max(0, settings.particleGap),
+    particleResolution: clampInteger(settings.particleResolution, 0, 2),
   };
 }
 
@@ -1092,8 +1107,8 @@ struct Params {
   hideEnclosed: u32,
   targetParticles: u32,
   epoch: u32,
-  sphereScale: f32,
-  sphereGap: f32,
+  particleSize: f32,
+  reserved1: u32,
   maxHashProbes: u32,
   clearThreads: u32,
   pad1: u32,
@@ -1292,11 +1307,12 @@ fn radiusSq(position: vec3<i32>) -> u32 {
 }
 
 fn makeMatrix(position: vec3<i32>) -> mat4x4<f32> {
+  let particleSize = params.particleSize;
   return mat4x4<f32>(
     vec4<f32>(1.0, 0.0, 0.0, 0.0),
     vec4<f32>(0.0, 1.0, 0.0, 0.0),
     vec4<f32>(0.0, 0.0, 1.0, 0.0),
-    vec4<f32>(vec3<f32>(position), 1.0)
+    vec4<f32>(vec3<f32>(position) * particleSize, 1.0)
   );
 }
 

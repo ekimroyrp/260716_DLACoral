@@ -20,11 +20,10 @@ import {
 } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
-import { add, attribute, clamp, max, mix, pass, uniform } from 'three/tsl';
+import { add, attribute, clamp, max, mix, pass, select, uniform } from 'three/tsl';
 import {
   DEFAULT_DISPLAY_SETTINGS,
   DEFAULT_DLA_SETTINGS,
-  type AttachmentNeighborhood,
   type DisplaySettings,
   type DlaSettings,
 } from '../types';
@@ -34,16 +33,17 @@ import { disableWebGlFallback } from './nativeWebGpu';
 import { createRequiredDeviceLimits } from './webGpuLimits';
 
 const DEG_TO_RAD = Math.PI / 180;
-const MODEL_ROTATION_DEGREES_PER_PIXEL = 0.35;
+const SEED_ROTATION_DEGREES_PER_PIXEL = 0.35;
 const KEY_LIGHT_DISTANCE_SCALE = 2.69284236449147;
 const INITIAL_CAMERA_EXTENT = 24;
 const INITIAL_CAMERA_DISTANCE_SCALE = 1.5;
+const INITIAL_CAMERA_ZOOM_OUT = 4;
 const MAX_PIXEL_RATIO = 2;
 
-export type RotationPhase = 'begin' | 'change' | 'end';
+export type SeedRotationPhase = 'begin' | 'change' | 'end';
 
 export interface DlaRendererOptions {
-  onModelRotationChange?: (rotation: number, phase: RotationPhase) => void;
+  onSeedRotationChange?: (rotation: number, phase: SeedRotationPhase) => void;
   onError?: (error: Error) => void;
 }
 
@@ -73,7 +73,6 @@ export type InstanceDataProvider = (count: number) => Promise<CpuInstanceData>;
 
 export interface SphereGeometryData {
   geometry: BufferGeometry;
-  rawPositions: Float32Array;
   basePositions: Float32Array;
 }
 
@@ -105,19 +104,22 @@ export class DlaRenderer {
   private readonly outerColorUniform = uniform(createDisplayColor(DEFAULT_DISPLAY_SETTINGS.outerColor));
   private readonly gradientCountUniform = uniform(1);
   private readonly seedCountUniform = uniform(1);
+  private readonly gradientContrastUniform = uniform(DEFAULT_DISPLAY_SETTINGS.gradientContrast);
+  private readonly gradientBiasUniform = uniform(DEFAULT_DISPLAY_SETTINGS.gradientBias);
+  private readonly gradientBlurUniform = uniform(DEFAULT_DISPLAY_SETTINGS.gradientBlur);
   private readonly brightnessUniform = uniform(DEFAULT_DISPLAY_SETTINGS.brightness);
   private readonly contrastUniform = uniform(DEFAULT_DISPLAY_SETTINGS.contrast);
   private geometry: BufferGeometry;
-  private rawPositions: Float32Array;
   private basePositions: Float32Array;
   private birthAttribute: StorageInstancedBufferAttribute;
   private mesh: InstancedMesh;
   private targets: DlaRenderTargets | null = null;
   private instanceCapacity = 1;
-  private sphereDetail = 0;
-  private currentNeighborhood: AttachmentNeighborhood = 26;
-  private currentSphereGap = 0;
-  private currentRotation = 0;
+  private particleResolution = DEFAULT_DLA_SETTINGS.particleResolution;
+  private currentParticleSize = 1;
+  private currentParticleGap = 0;
+  private currentParticleScale = 1;
+  private currentSeedRotation = 0;
   private displayedCount = 0;
   private seedCount = 1;
   private lastTotalCount = 0;
@@ -127,9 +129,9 @@ export class DlaRenderer {
   private currentExtent = INITIAL_CAMERA_EXTENT;
   private currentDla: DlaSettings = { ...DEFAULT_DLA_SETTINGS };
   private currentDisplay: DisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS };
-  private modelRotationPointerId: number | null = null;
-  private modelRotationStartX = 0;
-  private modelRotationStartDegrees = 0;
+  private seedRotationPointerId: number | null = null;
+  private seedRotationStartX = 0;
+  private seedRotationStartDegrees = 0;
   private instanceDataProvider: InstanceDataProvider | null = null;
   private initialized = false;
   private disposed = false;
@@ -142,11 +144,15 @@ export class DlaRenderer {
     this.scene = new Scene();
     this.scene.background = new Color(0x000000);
 
+    const initialTargetY = INITIAL_CAMERA_EXTENT * 0.12;
+    const initialCameraX = INITIAL_CAMERA_EXTENT * 0.92 * INITIAL_CAMERA_DISTANCE_SCALE;
+    const initialCameraY = INITIAL_CAMERA_EXTENT * 0.72 * INITIAL_CAMERA_DISTANCE_SCALE;
+    const initialCameraZ = INITIAL_CAMERA_EXTENT * 1.18 * INITIAL_CAMERA_DISTANCE_SCALE;
     this.camera = new PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.01, 5000);
     this.camera.position.set(
-      INITIAL_CAMERA_EXTENT * 0.92 * INITIAL_CAMERA_DISTANCE_SCALE,
-      INITIAL_CAMERA_EXTENT * 0.72 * INITIAL_CAMERA_DISTANCE_SCALE,
-      INITIAL_CAMERA_EXTENT * 1.18 * INITIAL_CAMERA_DISTANCE_SCALE,
+      initialCameraX * INITIAL_CAMERA_ZOOM_OUT,
+      initialTargetY + (initialCameraY - initialTargetY) * INITIAL_CAMERA_ZOOM_OUT,
+      initialCameraZ * INITIAL_CAMERA_ZOOM_OUT,
     );
 
     this.renderer = new WebGPURenderer({
@@ -167,9 +173,8 @@ export class DlaRenderer {
     this.renderer.setPixelRatio(this.getPixelRatio());
     this.renderer.setSize(window.innerWidth, window.innerHeight);
 
-    const sphere = createSphereGeometry(this.sphereDetail, this.currentDla.attachmentNeighborhood);
+    const sphere = createSphereGeometry(this.particleResolution);
     this.geometry = sphere.geometry;
-    this.rawPositions = sphere.rawPositions;
     this.basePositions = sphere.basePositions;
     this.indirect = new IndirectStorageBufferAttribute(
       new Uint32Array([this.getSphereVertexCount(), 0, 0, 0]),
@@ -191,12 +196,36 @@ export class DlaRenderer {
       0,
       1,
     );
-    const gradientColor = mix(this.innerColorUniform, this.outerColorUniform, gradientPosition);
-    this.material.colorNode = clamp(
+    const shapedGradientPosition = clamp(
+      gradientPosition.mul(this.gradientContrastUniform).add(this.gradientBiasUniform),
+      0,
+      1,
+    );
+    const blurredGradientPosition = mix(
+      shapedGradientPosition,
+      gradientPosition,
+      clamp(this.gradientBlurUniform, 0, 1),
+    );
+    const endpointSafeGradientPosition = select(
+      birthRank.lessThan(this.seedCountUniform),
+      0,
+      select(gradientPosition.greaterThanEqual(1), 1, blurredGradientPosition),
+    );
+    const gradientColor = mix(
+      this.innerColorUniform.rgb,
+      this.outerColorUniform.rgb,
+      endpointSafeGradientPosition,
+    );
+    const gradedGradientColor = clamp(
       gradientColor.sub(0.5).mul(this.contrastUniform).add(0.5),
       0,
       4,
     ).mul(this.brightnessUniform);
+    this.material.colorNode = select(
+      birthRank.lessThan(this.seedCountUniform),
+      this.innerColorUniform.rgb,
+      gradedGradientColor,
+    );
 
     this.birthAttribute = new StorageInstancedBufferAttribute(1, 4);
     this.geometry.setAttribute('instanceBirth', this.birthAttribute);
@@ -247,14 +276,14 @@ export class DlaRenderer {
       MIDDLE: MOUSE.PAN,
       RIGHT: MOUSE.ROTATE,
     };
-    this.controls.target.set(0, INITIAL_CAMERA_EXTENT * 0.12, 0);
+    this.controls.target.set(0, initialTargetY, 0);
     this.controls.update();
 
     this.canvas.addEventListener('contextmenu', this.handleContextMenu);
-    this.canvas.addEventListener('pointerdown', this.handleModelRotationPointerDown);
-    this.canvas.ownerDocument.addEventListener('pointermove', this.handleModelRotationPointerMove);
-    this.canvas.ownerDocument.addEventListener('pointerup', this.handleModelRotationPointerEnd);
-    this.canvas.ownerDocument.addEventListener('pointercancel', this.handleModelRotationPointerEnd);
+    this.canvas.addEventListener('pointerdown', this.handleSeedRotationPointerDown);
+    this.canvas.ownerDocument.addEventListener('pointermove', this.handleSeedRotationPointerMove);
+    this.canvas.ownerDocument.addEventListener('pointerup', this.handleSeedRotationPointerEnd);
+    this.canvas.ownerDocument.addEventListener('pointercancel', this.handleSeedRotationPointerEnd);
     window.addEventListener('contextmenu', this.handleContextMenu);
     window.addEventListener('resize', this.handleWindowResize);
   }
@@ -278,7 +307,7 @@ export class DlaRenderer {
       throw new Error('Native WebGPU is required to run 260716_DLAFractals.');
     }
     this.initialized = true;
-    this.prepareInstances(1, this.sphereDetail);
+    this.prepareInstances(1, this.particleResolution);
   }
 
   getWebGpuDevice(): GPUDevice {
@@ -298,7 +327,7 @@ export class DlaRenderer {
     return Math.max(1, Math.min(matrixLimit, birthLimit));
   }
 
-  prepareInstances(capacity: number, sphereDetail: number): DlaRenderTargets {
+  prepareInstances(capacity: number, particleResolution: number): DlaRenderTargets {
     this.assertReady();
     const safeCapacity = Math.max(1, Math.floor(capacity));
     const maxCapacity = this.getMaxSupportedCapacity();
@@ -306,7 +335,7 @@ export class DlaRenderer {
       throw new Error(`This WebGPU device supports at most ${maxCapacity.toLocaleString()} DLA instances.`);
     }
 
-    this.setSphereDetail(sphereDetail);
+    this.setParticleResolution(particleResolution);
     if (this.instanceCapacity !== safeCapacity || this.mesh.instanceMatrix.count < safeCapacity) {
       this.replaceMesh(safeCapacity);
     }
@@ -347,24 +376,27 @@ export class DlaRenderer {
 
   updateDlaSettings(settings: DlaSettings): void {
     this.assertNotDisposed();
-    const sphereScaleChanged = settings.sphereScale !== this.currentDla.sphereScale;
+    const geometryExtentChanged =
+      settings.particleResolution !== this.currentDla.particleResolution
+      || settings.particleSize !== this.currentDla.particleSize
+      || settings.particleGap !== this.currentDla.particleGap
+      || settings.particleScale !== this.currentDla.particleScale;
     const renderSettingsChanged =
-      settings.sphereDetail !== this.currentDla.sphereDetail
-      || settings.attachmentNeighborhood !== this.currentDla.attachmentNeighborhood
-      || settings.sphereGap !== this.currentDla.sphereGap
-      || settings.sphereScale !== this.currentDla.sphereScale
-      || settings.rotation !== this.currentDla.rotation;
+      geometryExtentChanged
+      || settings.seedRotation !== this.currentDla.seedRotation;
     this.currentDla = { ...settings };
     if (!renderSettingsChanged) {
       return;
     }
-    this.setSphereDetail(settings.sphereDetail);
-    this.setSphereNeighborhood(settings.attachmentNeighborhood);
-    this.setSphereGap(settings.sphereGap);
-    this.mesh.scale.setScalar(Math.max(0.01, settings.sphereScale));
-    this.setModelRotation(settings.rotation);
-    if (sphereScaleChanged) {
-      const extent = extentFromRadius(this.lastMaxRadiusSq, settings.sphereScale);
+    this.setParticleResolution(settings.particleResolution);
+    this.setParticleDimensions(settings.particleSize, settings.particleGap, settings.particleScale);
+    this.setSeedRotation(settings.seedRotation);
+    if (geometryExtentChanged) {
+      const extent = extentFromRadius(
+        this.lastMaxRadiusSq,
+        settings.particleSize,
+        this.getCurrentLocalRadius(),
+      );
       this.currentExtent = extent;
       this.updateLightRig(extent, this.currentDisplay);
     }
@@ -379,6 +411,9 @@ export class DlaRenderer {
     this.currentDisplay = { ...settings };
     setDisplayColor(this.innerColorUniform.value, settings.innerColor);
     setDisplayColor(this.outerColorUniform.value, settings.outerColor);
+    this.gradientContrastUniform.value = settings.gradientContrast;
+    this.gradientBiasUniform.value = settings.gradientBias;
+    this.gradientBlurUniform.value = clampNumber(settings.gradientBlur, 0, 1);
     this.brightnessUniform.value = Math.max(0, settings.brightness);
     this.contrastUniform.value = Math.max(0, settings.contrast);
     this.renderer.toneMappingExposure = Math.max(0, settings.exposure);
@@ -427,7 +462,11 @@ export class DlaRenderer {
     this.lastTotalCount = totalCount;
     this.lastMaxRadiusSq = Math.max(0, state.maxRadiusSq);
 
-    const extent = extentFromRadius(state.maxRadiusSq, this.currentDla.sphereScale);
+    const extent = extentFromRadius(
+      state.maxRadiusSq,
+      this.currentDla.particleSize,
+      this.getCurrentLocalRadius(),
+    );
     this.currentExtent = extent;
     this.updateLightRig(extent, this.currentDisplay);
     if (aggregateChanged) {
@@ -435,9 +474,9 @@ export class DlaRenderer {
     }
   }
 
-  setModelRotation(degrees: number): void {
-    this.currentRotation = normalizeRotationDegrees(degrees);
-    this.mesh.rotation.y = this.currentRotation * DEG_TO_RAD;
+  setSeedRotation(degrees: number): void {
+    this.currentSeedRotation = normalizeRotationDegrees(degrees);
+    this.mesh.rotation.y = this.currentSeedRotation * DEG_TO_RAD;
     this.keyLight.shadow.needsUpdate = true;
   }
 
@@ -471,10 +510,12 @@ export class DlaRenderer {
       ),
       spherePositions: new Float32Array(positions),
       sphereNormals: new Float32Array(normals),
-      sphereScale: this.mesh.scale.x,
-      rotationDegrees: this.currentRotation,
+      seedRotationDegrees: this.currentSeedRotation,
       innerColor: this.currentDisplay.innerColor,
       outerColor: this.currentDisplay.outerColor,
+      gradientContrast: this.currentDisplay.gradientContrast,
+      gradientBias: this.currentDisplay.gradientBias,
+      gradientBlur: this.currentDisplay.gradientBlur,
       brightness: this.currentDisplay.brightness,
       contrast: this.currentDisplay.contrast,
       materialRoughness: this.material.roughness,
@@ -538,10 +579,10 @@ export class DlaRenderer {
     this.renderer.setAnimationLoop(null);
     this.controls.dispose();
     this.canvas.removeEventListener('contextmenu', this.handleContextMenu);
-    this.canvas.removeEventListener('pointerdown', this.handleModelRotationPointerDown);
-    this.canvas.ownerDocument.removeEventListener('pointermove', this.handleModelRotationPointerMove);
-    this.canvas.ownerDocument.removeEventListener('pointerup', this.handleModelRotationPointerEnd);
-    this.canvas.ownerDocument.removeEventListener('pointercancel', this.handleModelRotationPointerEnd);
+    this.canvas.removeEventListener('pointerdown', this.handleSeedRotationPointerDown);
+    this.canvas.ownerDocument.removeEventListener('pointermove', this.handleSeedRotationPointerMove);
+    this.canvas.ownerDocument.removeEventListener('pointerup', this.handleSeedRotationPointerEnd);
+    this.canvas.ownerDocument.removeEventListener('pointercancel', this.handleSeedRotationPointerEnd);
     window.removeEventListener('contextmenu', this.handleContextMenu);
     window.removeEventListener('resize', this.handleWindowResize);
     this.scene.remove(this.mesh);
@@ -562,62 +603,66 @@ export class DlaRenderer {
     event.preventDefault();
   };
 
-  private readonly handleModelRotationPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0 || this.modelRotationPointerId !== null) {
+  private readonly handleSeedRotationPointerDown = (event: PointerEvent): void => {
+    if (event.button !== 0 || this.seedRotationPointerId !== null) {
       return;
     }
-    this.modelRotationPointerId = event.pointerId;
-    this.modelRotationStartX = event.clientX;
-    this.modelRotationStartDegrees = this.currentRotation;
+    this.seedRotationPointerId = event.pointerId;
+    this.seedRotationStartX = event.clientX;
+    this.seedRotationStartDegrees = this.currentSeedRotation;
     this.canvas.setPointerCapture?.(event.pointerId);
-    this.options.onModelRotationChange?.(this.currentRotation, 'begin');
+    this.options.onSeedRotationChange?.(this.currentSeedRotation, 'begin');
     event.preventDefault();
   };
 
-  private readonly handleModelRotationPointerMove = (event: PointerEvent): void => {
-    if (event.pointerId !== this.modelRotationPointerId) {
+  private readonly handleSeedRotationPointerMove = (event: PointerEvent): void => {
+    if (event.pointerId !== this.seedRotationPointerId) {
       return;
     }
     const nextRotation = normalizeRotationDegrees(
-      this.modelRotationStartDegrees
-        + (event.clientX - this.modelRotationStartX) * MODEL_ROTATION_DEGREES_PER_PIXEL,
+      this.seedRotationStartDegrees
+        + (event.clientX - this.seedRotationStartX) * SEED_ROTATION_DEGREES_PER_PIXEL,
     );
-    this.setModelRotation(nextRotation);
-    this.options.onModelRotationChange?.(nextRotation, 'change');
+    this.setSeedRotation(nextRotation);
+    this.options.onSeedRotationChange?.(nextRotation, 'change');
     event.preventDefault();
   };
 
-  private readonly handleModelRotationPointerEnd = (event: PointerEvent): void => {
-    if (event.pointerId !== this.modelRotationPointerId) {
+  private readonly handleSeedRotationPointerEnd = (event: PointerEvent): void => {
+    if (event.pointerId !== this.seedRotationPointerId) {
       return;
     }
-    this.modelRotationPointerId = null;
+    this.seedRotationPointerId = null;
     if (this.canvas.hasPointerCapture?.(event.pointerId)) {
       this.canvas.releasePointerCapture(event.pointerId);
     }
-    this.options.onModelRotationChange?.(this.currentRotation, 'end');
+    this.options.onSeedRotationChange?.(this.currentSeedRotation, 'end');
     event.preventDefault();
   };
 
-  private setSphereDetail(detail: number): void {
-    const safeDetail = clampInteger(detail, 0, 2);
-    if (safeDetail === this.sphereDetail) {
+  private setParticleResolution(resolution: number): void {
+    const safeResolution = clampInteger(resolution, 0, 2);
+    if (safeResolution === this.particleResolution) {
       return;
     }
 
     const previousGeometry = this.geometry;
-    const sphere = createSphereGeometry(safeDetail, this.currentDla.attachmentNeighborhood);
+    const sphere = createSphereGeometry(safeResolution);
     this.geometry = sphere.geometry;
-    this.rawPositions = sphere.rawPositions;
     this.basePositions = sphere.basePositions;
-    this.sphereDetail = safeDetail;
-    this.currentNeighborhood = this.currentDla.attachmentNeighborhood;
+    this.particleResolution = safeResolution;
     this.geometry.setAttribute('instanceBirth', this.birthAttribute);
     this.geometry.setIndirect(this.indirect);
     this.mesh.geometry = this.geometry;
     previousGeometry.dispose();
-    this.currentSphereGap = Number.NaN;
-    this.setSphereGap(this.currentDla.sphereGap);
+    this.currentParticleSize = Number.NaN;
+    this.currentParticleGap = Number.NaN;
+    this.currentParticleScale = Number.NaN;
+    this.setParticleDimensions(
+      this.currentDla.particleSize,
+      this.currentDla.particleGap,
+      this.currentDla.particleScale,
+    );
 
     if (this.targets) {
       const vertexCount = this.getSphereVertexCount();
@@ -631,23 +676,27 @@ export class DlaRenderer {
     this.keyLight.shadow.needsUpdate = true;
   }
 
-  private setSphereNeighborhood(neighborhood: AttachmentNeighborhood): void {
-    if (neighborhood === this.currentNeighborhood) {
-      return;
-    }
-    this.basePositions = calibrateSphereForNeighborhood(this.rawPositions, neighborhood);
-    this.currentNeighborhood = neighborhood;
-    this.currentSphereGap = Number.NaN;
-    this.setSphereGap(this.currentDla.sphereGap);
-  }
-
-  private setSphereGap(gap: number): void {
+  private setParticleDimensions(particleSize: number, gap: number, particleScale: number): void {
+    const safeParticleSize = Math.max(0.001, particleSize);
     const safeGap = Math.max(0, gap);
-    if (Math.abs(safeGap - this.currentSphereGap) <= 0.0001) {
+    const safeParticleScale = Math.max(0.01, particleScale);
+    if (
+      Math.abs(safeParticleSize - this.currentParticleSize) <= 0.0001
+      && Math.abs(safeGap - this.currentParticleGap) <= 0.0001
+      && Math.abs(safeParticleScale - this.currentParticleScale) <= 0.0001
+    ) {
       return;
     }
-    applySphereGapToGeometry(this.geometry, this.basePositions, safeGap);
-    this.currentSphereGap = safeGap;
+    applyParticleDimensionsToGeometry(
+      this.geometry,
+      this.basePositions,
+      safeParticleSize,
+      safeGap,
+      safeParticleScale,
+    );
+    this.currentParticleSize = safeParticleSize;
+    this.currentParticleGap = safeGap;
+    this.currentParticleScale = safeParticleScale;
     this.keyLight.shadow.needsUpdate = true;
   }
 
@@ -657,8 +706,7 @@ export class DlaRenderer {
     this.birthAttribute = new StorageInstancedBufferAttribute(capacity, 4);
     this.geometry.setAttribute('instanceBirth', this.birthAttribute);
     this.mesh = this.createMesh(capacity, this.birthAttribute);
-    this.mesh.rotation.y = this.currentRotation * DEG_TO_RAD;
-    this.mesh.scale.setScalar(Math.max(0.01, this.currentDla.sphereScale));
+    this.mesh.rotation.y = this.currentSeedRotation * DEG_TO_RAD;
     this.scene.add(this.mesh);
     this.targets = null;
   }
@@ -720,6 +768,10 @@ export class DlaRenderer {
 
   private getCurrentExtent(): number {
     return this.currentExtent;
+  }
+
+  private getCurrentLocalRadius(): number {
+    return Math.max(0.01, this.geometry.boundingSphere?.radius ?? 0.5);
   }
 
   private getSphereVertexCount(): number {
@@ -815,10 +867,7 @@ export class DlaRenderer {
   }
 }
 
-export function createSphereGeometry(
-  detail: number,
-  neighborhood: AttachmentNeighborhood = 26,
-): SphereGeometryData {
+export function createSphereGeometry(detail: number): SphereGeometryData {
   const subdivisions = [0, 1, 3][clampInteger(detail, 0, 2)] ?? 0;
   const source = new IcosahedronGeometry(0.5, subdivisions);
   const geometry = source.index ? source.toNonIndexed() : source;
@@ -828,7 +877,7 @@ export function createSphereGeometry(
 
   const positions = geometry.getAttribute('position');
   const rawPositions = new Float32Array(positions.array);
-  const basePositions = calibrateSphereForNeighborhood(rawPositions, neighborhood);
+  const basePositions = calibrateSphereForLatticeContact(rawPositions);
   (positions.array as Float32Array).set(basePositions);
   positions.needsUpdate = true;
   const normals = new Float32Array(positions.count * 3);
@@ -847,22 +896,24 @@ export function createSphereGeometry(
   geometry.computeBoundingSphere();
   return {
     geometry,
-    rawPositions,
     basePositions,
   };
 }
 
-export function applySphereGapToGeometry(
+export function applyParticleDimensionsToGeometry(
   geometry: BufferGeometry,
   zeroGapPositions: Float32Array,
+  particleSize: number,
   gap: number,
+  particleScale: number,
 ): void {
   const positions = geometry.getAttribute('position');
   const array = positions.array as Float32Array;
   if (zeroGapPositions.length !== array.length) {
-    throw new Error('Sphere gap geometry does not match its calibrated zero-gap positions.');
+    throw new Error('Sphere geometry does not match its calibrated positions.');
   }
-  const radiusScale = Math.max(0.01, 1 - Math.max(0, gap));
+  const gapScale = Math.max(0.01, 1 - Math.max(0, gap));
+  const radiusScale = Math.max(0.001, particleSize) * Math.max(0.01, particleScale) * gapScale;
   for (let index = 0; index < array.length; index += 1) {
     array[index] = zeroGapPositions[index] * radiusScale;
   }
@@ -871,12 +922,9 @@ export function applySphereGapToGeometry(
   geometry.computeBoundingSphere();
 }
 
-function calibrateSphereForNeighborhood(
-  rawPositions: Float32Array,
-  neighborhood: AttachmentNeighborhood,
-): Float32Array {
+function calibrateSphereForLatticeContact(rawPositions: Float32Array): Float32Array {
   let calibrationScale = 1;
-  for (const [offsetX, offsetY, offsetZ] of latticeOffsets(neighborhood)) {
+  for (const [offsetX, offsetY, offsetZ] of latticeOffsets()) {
     const distance = Math.hypot(offsetX, offsetY, offsetZ);
     const directionX = offsetX / distance;
     const directionY = offsetY / distance;
@@ -901,19 +949,13 @@ function calibrateSphereForNeighborhood(
   return calibrated;
 }
 
-function latticeOffsets(neighborhood: AttachmentNeighborhood): Array<[number, number, number]> {
+function latticeOffsets(): Array<[number, number, number]> {
   const offsets: Array<[number, number, number]> = [];
   for (let z = -1; z <= 1; z += 1) {
     for (let y = -1; y <= 1; y += 1) {
       for (let x = -1; x <= 1; x += 1) {
         const nonzeroAxes = Number(x !== 0) + Number(y !== 0) + Number(z !== 0);
         if (nonzeroAxes === 0) {
-          continue;
-        }
-        if (neighborhood === 6 && nonzeroAxes !== 1) {
-          continue;
-        }
-        if (neighborhood === 18 && nonzeroAxes === 3) {
           continue;
         }
         offsets.push([x, y, z]);
@@ -923,9 +965,16 @@ function latticeOffsets(neighborhood: AttachmentNeighborhood): Array<[number, nu
   return offsets;
 }
 
-function extentFromRadius(maxRadiusSq: number, sphereScale: number): number {
-  const radius = Math.sqrt(Math.max(0, maxRadiusSq));
-  return Math.max(24, (radius * 2 + 2) * Math.max(0.01, sphereScale));
+function extentFromRadius(
+  maxRadiusSq: number,
+  particleSize: number,
+  localRadius: number,
+): number {
+  const radius = Math.sqrt(Math.max(0, maxRadiusSq)) * Math.max(0.001, particleSize);
+  return Math.max(
+    24,
+    radius * 2 + Math.max(0.02, localRadius * 2),
+  );
 }
 
 function normalizeRotationDegrees(value: number): number {
@@ -945,6 +994,9 @@ function displaySettingsEqual(a: DisplaySettings, b: DisplaySettings): boolean {
   return (
     a.innerColor === b.innerColor
     && a.outerColor === b.outerColor
+    && a.gradientContrast === b.gradientContrast
+    && a.gradientBias === b.gradientBias
+    && a.gradientBlur === b.gradientBlur
     && a.lightAzimuth === b.lightAzimuth
     && a.lightElevation === b.lightElevation
     && a.keyBrightness === b.keyBrightness

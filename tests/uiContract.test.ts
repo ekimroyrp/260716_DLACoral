@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 const page = readFileSync('index.html', 'utf8');
 const styles = readFileSync('src/style.css', 'utf8');
+const mainSource = readFileSync('src/main.ts', 'utf8');
 
 beforeEach(() => {
   const parsed = new DOMParser().parseFromString(page, 'text/html');
@@ -21,7 +22,7 @@ describe('first-version UI contract', () => {
   it('keeps the required section and export order', () => {
     expect(textList('.panel-section-label')).toEqual([
       'Simulation',
-      'Diffusion-Limited Aggregation',
+      'Aggregation',
       'Display',
       'Export',
     ]);
@@ -34,12 +35,24 @@ describe('first-version UI contract', () => {
     expect(styles).toMatch(/backdrop-filter:\s*blur\(18px\)\s+saturate\(145%\);/);
   });
 
+  it('does not place rebuild or progress messages over the scene', () => {
+    expect(document.getElementById('status-overlay')).toBeNull();
+    expect(styles).not.toContain('#status-overlay');
+    expect(mainSource).not.toMatch(/Rebuilding seed|Resetting aggregate|Preparing GLB|Preparing OBJ|Updating sphere geometry|Growing GPU buffers/);
+    expect(document.getElementById('fatal-error-note')).not.toBeNull();
+  });
+
   it('keeps every numeric control at its specified initial bounds, step, and default', () => {
     const contracts: Array<[string, number, number, number, number]> = [
       ['simulation-timeline', 0, 0, 1, 0],
       ['simulation-rate', 0.1, 3, 0.01, 1],
       ['seed', 1, 999_999, 1, 260_716],
       ['seed-radius', 1, 64, 1, 8],
+      ['seed-rotation', -360, 360, 1, 0],
+      ['particle-size', 0.1, 4, 0.01, 1],
+      ['particle-gap', 0, 0.38, 0.01, 0],
+      ['particle-scale', 0.1, 3, 0.01, 1],
+      ['particle-resolution', 0, 2, 1, 2],
       ['target-particles', 1_000, 1_000_000, 1_000, 1_000_000],
       ['stick-neighbors', 1, 26, 1, 1],
       ['stick-chance', 0.01, 1, 0.01, 1],
@@ -47,25 +60,24 @@ describe('first-version UI contract', () => {
       ['kill-padding', 1, 64, 1, 3],
       ['growth-batch', 1, 4_096, 1, 256],
       ['walker-pool', 1_024, 131_072, 1_024, 65_536],
-      ['rotation', -360, 360, 1, 0],
-      ['sphere-scale', 0.42, 1.15, 0.01, 1],
-      ['sphere-gap', 0, 0.38, 0.01, 0],
-      ['sphere-detail', 0, 2, 1, 0],
-      ['light-azimuth', -180, 180, 0.01, 25.65],
-      ['light-elevation', -20, 85, 0.01, 68.7],
-      ['key-brightness', 0, 12, 0.01, 2.41],
-      ['ambient-fill', 0, 2, 0.01, 0.3],
+      ['gradient-contrast', 0.2, 3, 0.01, 1.37],
+      ['gradient-bias', -1, 1, 0.01, -0.74],
+      ['gradient-blur', 0, 1, 0.01, 0.45],
+      ['light-azimuth', -180, 180, 0.01, -3.08],
+      ['light-elevation', -20, 85, 0.01, 55.79],
+      ['key-brightness', 0, 12, 0.01, 3.37],
+      ['ambient-fill', 0, 2, 0.01, 0.8],
       ['rim-brightness', 0, 5, 0.01, 0.49],
-      ['bounce-brightness', 0, 2, 0.01, 0.07],
-      ['shadow-strength', 0, 1.5, 0.01, 1.08],
-      ['shadow-softness', 0, 5, 0.01, 2.6],
-      ['exposure', 0.1, 3, 0.01, 0.7],
-      ['brightness', 0.1, 3, 0.01, 1],
-      ['contrast', 0.1, 3, 0.01, 2.25],
-      ['roughness', 0, 1, 0.01, 0.92],
-      ['bloom-strength', 0, 2, 0.01, 0.08],
-      ['bloom-radius', 0, 1, 0.01, 0.26],
-      ['bloom-threshold', 0, 2, 0.01, 0],
+      ['bounce-brightness', 0, 2, 0.01, 0.45],
+      ['shadow-strength', 0, 1.5, 0.01, 1.13],
+      ['shadow-softness', 0, 5, 0.01, 2.09],
+      ['exposure', 0.1, 3, 0.01, 0.68],
+      ['brightness', 0.1, 3, 0.01, 1.15],
+      ['contrast', 0.1, 3, 0.01, 2.55],
+      ['roughness', 0, 1, 0.01, 0],
+      ['bloom-strength', 0, 2, 0.01, 0.13],
+      ['bloom-radius', 0, 1, 0.01, 0.24],
+      ['bloom-threshold', 0, 2, 0.01, 0.19],
     ];
 
     for (const [id, min, max, step, value] of contracts) {
@@ -92,17 +104,66 @@ describe('first-version UI contract', () => {
       ['26', 'Full 26'],
     ]);
     expect(requiredSelect('attachment-neighborhood').value).toBe('26');
-    expect(requiredInput('inner-color').value).toBe('#6b2f24');
-    expect(requiredInput('outer-color').value).toBe('#f4e6d2');
+    expect(requiredInput('inner-color').value).toBe('#ac2a4a');
+    expect(requiredInput('outer-color').value).toBe('#ffffff');
+    const swatches = document.querySelector('.gradient-swatches');
+    expect(swatches).not.toBeNull();
+    expect(swatches?.classList.contains('control-grid-2')).toBe(true);
+    expect(textList('.gradient-swatches .control-row > span:first-child')).toEqual([
+      'Gradient Start',
+      'Gradient End',
+    ]);
+    const display = Array.from(document.querySelectorAll<HTMLElement>('.panel-section'))
+      .find((section) => section.querySelector('.panel-section-label')?.textContent === 'Display');
+    expect(Array.from(display!.querySelectorAll<HTMLElement>('.control-row > span:first-child'), (element) => element.textContent).slice(0, 5)).toEqual([
+      'Gradient Start',
+      'Gradient End',
+      'Gradient Contrast',
+      'Gradient Bias',
+      'Gradient Blur',
+    ]);
     expect(requiredInput('hide-enclosed').checked).toBe(true);
+    const sections = Array.from(document.querySelectorAll<HTMLElement>('.panel-section'));
+    const aggregation = sections.find((section) => section.querySelector('.panel-section-label')?.textContent === 'Aggregation');
+    expect(aggregation).toBeDefined();
+    expect(Array.from(aggregation!.querySelectorAll<HTMLElement>('.control-row > span:first-child'), (element) => element.textContent)).toEqual([
+      'Seed',
+      'Seed Shape',
+      'Seed Radius',
+      'Seed Rotation',
+      'Particle Size',
+      'Particle Gap',
+      'Particle Scale',
+      'Particle Resolution',
+      'Target Particles',
+      'Attachment Neighborhood',
+      'Stick Neighbors',
+      'Stick Chance',
+      'Launch Padding',
+      'Kill Padding',
+      'Growth Batch',
+      'Walker Pool',
+    ]);
+    expect(aggregation!.querySelector('#particle-count-note')).toBeNull();
+    expect(document.getElementById('particle-size')).not.toBeNull();
+    expect(document.getElementById('particle-scale')).not.toBeNull();
+    expect(document.getElementById('particle-scale-value')).not.toBeNull();
+    expect(document.getElementById('rotation')).toBeNull();
+    expect(document.getElementById('sphere-gap')).toBeNull();
+    expect(document.getElementById('sphere-scale')).toBeNull();
+    expect(document.getElementById('sphere-detail')).toBeNull();
+    expect(document.getElementById('global-scale')).toBeNull();
+    expect(document.getElementById('local-scale')).toBeNull();
     expect(document.getElementById('stick-neighbors-help')?.textContent).toBe(
       'Preferred occupied neighbors; growth uses the densest available candidates while bootstrapping.',
     );
     expect(requiredInput('stick-neighbors').getAttribute('aria-describedby')).toBe('stick-neighbors-help');
     expect(requiredInput('stick-neighbors-value').getAttribute('aria-describedby')).toBe('stick-neighbors-help');
     expect(document.querySelector('.control-hint')?.textContent).toBe(
-      'Wheel = Zoom, MMB = Pan, RMB = Orbit, LMB = Rotate Model',
+      'Particle Count = 1',
     );
+    expect(mainSource).toContain('ui.setParticleCount(next.visibleCount);');
+    expect(mainSource).not.toContain('ui.setParticleCount(next.currentCount');
   });
 });
 

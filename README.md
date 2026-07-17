@@ -7,9 +7,10 @@
 - Native WebGPU simulation and rendering with no WebGL fallback
 - Point, spherical-shell, and ring seed shapes
 - Adjustable sticking neighborhood, neighbor threshold, sticking chance, walker pool, launch/kill padding, and growth batch
-- Shared detail-adjustable icosphere mesh with indirect instanced rendering
-- Neighborhood-aware zero-gap sphere contact for face, edge, and corner attachments
-- Inner-to-outer color gradient based on particle birth order
+- Independently sized seed particles, allowing fixed-radius shells and rings to use more small particles or fewer large ones
+- Shared resolution-adjustable icosphere mesh with indirect instanced rendering
+- Zero-gap particle contact independent of attachment-neighborhood rules
+- Birth-order Gradient Start/End colors with adjustable contrast, bias, and blur
 - Studio lighting, soft shadows, ACES tone mapping, and bloom
 - Start/Pause, Reset, Simulation Rate, and branchable Simulation Timeline
 - Ctrl/Cmd+Z and Ctrl/Cmd+Y action history
@@ -63,13 +64,18 @@ npm test
 
 Starting from an earlier timeline point removes the later future and grows a new deterministic branch.
 
-### Diffusion-Limited Aggregation
+### Aggregation
 
 | Control | Default | Initial range / options |
 |---|---:|---|
 | Seed | 260716 | `1–999999`, step `1` |
 | Seed Shape | Point | Point, Sphere, Ring |
 | Seed Radius | 8 | `1–64`, step `1` |
+| Seed Rotation | 0 | `-360–360`, step `1` |
+| Particle Size | 1.00 | `0.10–4.00`, step `0.01` |
+| Particle Gap | 0.00 | `0–0.38`, step `0.01` |
+| Particle Scale | 1.00 | `0.10–3.00`, step `0.01` |
+| Particle Resolution | 2 | `0–2`, step `1` (60 / 240 / 960 vertices) |
 | Target Particles | 1,000,000 | `1,000–1,000,000`, step `1,000` |
 | Attachment Neighborhood | Full | Faces 6, Faces + Edges 18, Full 26 |
 | Stick Neighbors | 1 | `1` through the selected neighborhood size |
@@ -78,41 +84,40 @@ Starting from an earlier timeline point removes the later future and grows a new
 | Kill Padding | 3 | `1–64`, step `1` |
 | Growth Batch | 256 | `1–4096`, step `1` |
 | Walker Pool | 65,536 | `1,024–131,072`, step `1,024` |
-| Rotation | 0 | `-360–360`, step `1` |
-| Sphere Scale | 1.00 | `0.42–1.15`, step `0.01` |
-| Sphere Gap | 0.00 | `0–0.38`, step `0.01` |
-| Sphere Detail | 0 | `0–2`, step `1` (60 / 240 / 960 vertices) |
 | Hide Enclosed | On | Omits fully surrounded particles from drawing |
 
 `Stick Neighbors` is the preferred occupied-neighbor threshold. While the aggregate is bootstrapping, growth uses the densest available candidates until that threshold becomes achievable.
 
-`Growth Batch = 1` commits one attachment per compute epoch. Larger values accept a bounded deterministic batch evaluated against the same pre-commit aggregate. The GPU device limit can reduce exceptionally large typed targets, walker pools, or seed shells.
+`Particle Size` sets both the simulation lattice spacing and the base sphere diameter. Seed Radius remains a world-space radius, so decreasing Particle Size packs more particles into Sphere and Ring seeds while increasing it uses fewer. Changing Particle Size rebuilds the seed. `Particle Scale` resizes each rendered particle around its center without changing lattice spacing, while `Particle Gap` adds proportional separation. Attachment Neighborhood affects aggregation only and never changes particle size.
 
-At `Sphere Gap = 0`, sphere geometry is calibrated for the selected 6, 18, or 26-cell neighborhood so every permitted neighboring attachment touches or overlaps. Increasing Sphere Gap separates the spheres proportionally.
+`Growth Batch = 1` commits one attachment per compute epoch. Larger values accept a bounded deterministic batch evaluated against the same pre-commit aggregate. The GPU device limit can reduce exceptionally large typed targets, walker pools, or seed shells.
 
 ### Display
 
-All seed particles use Inner Color. Attached particles interpolate by birth rank, and the newest displayed attachment reaches Outer Color exactly. Hex channels use the same brightness/contrast grading convention as AutomataChunks.
+All seed particles use the exact Gradient Start albedo. Attached particles interpolate by birth rank, and the newest displayed attachment reaches Gradient End exactly. Gradient Contrast and Gradient Bias shape the age ramp using the DifferentialGrowth curve; Gradient Blur softens that grading toward the underlying linear ramp. Brightness and Contrast grade attached age colors without replacing the seed color.
 
 | Control | Default | Initial range / step |
 |---|---:|---|
-| Inner Color | `#6b2f24` | Color |
-| Outer Color | `#f4e6d2` | Color |
-| Light Azimuth | 25.65 | `-180–180` / `0.01` |
-| Light Elevation | 68.70 | `-20–85` / `0.01` |
-| Key Brightness | 2.41 | `0–12` / `0.01` |
-| Ambient Fill | 0.30 | `0–2` / `0.01` |
+| Gradient Start | `#ac2a4a` | Color |
+| Gradient End | `#ffffff` | Color |
+| Gradient Contrast | 1.37 | `0.2–3` / `0.01` |
+| Gradient Bias | -0.74 | `-1–1` / `0.01` |
+| Gradient Blur | 0.45 | `0–1` / `0.01` |
+| Light Azimuth | -3.08 | `-180–180` / `0.01` |
+| Light Elevation | 55.79 | `-20–85` / `0.01` |
+| Key Brightness | 3.37 | `0–12` / `0.01` |
+| Ambient Fill | 0.80 | `0–2` / `0.01` |
 | Rim Brightness | 0.49 | `0–5` / `0.01` |
-| Bounce Brightness | 0.07 | `0–2` / `0.01` |
-| Shadow Strength | 1.08 | `0–1.5` / `0.01` |
-| Shadow Softness | 2.60 | `0–5` / `0.01` |
-| Exposure | 0.70 | `0.1–3` / `0.01` |
-| Brightness | 1.00 | `0.1–3` / `0.01` |
-| Contrast | 2.25 | `0.1–3` / `0.01` |
-| Roughness | 0.92 | `0–1` / `0.01` |
-| Bloom Strength | 0.08 | `0–2` / `0.01` |
-| Bloom Radius | 0.26 | `0–1` / `0.01` |
-| Bloom Threshold | 0.00 | `0–2` / `0.01` |
+| Bounce Brightness | 0.45 | `0–2` / `0.01` |
+| Shadow Strength | 1.13 | `0–1.5` / `0.01` |
+| Shadow Softness | 2.09 | `0–5` / `0.01` |
+| Exposure | 0.68 | `0.1–3` / `0.01` |
+| Brightness | 1.15 | `0.1–3` / `0.01` |
+| Contrast | 2.55 | `0.1–3` / `0.01` |
+| Roughness | 0.00 | `0–1` / `0.01` |
+| Bloom Strength | 0.13 | `0–2` / `0.01` |
+| Bloom Radius | 0.24 | `0–1` / `0.01` |
+| Bloom Threshold | 0.19 | `0–2` / `0.01` |
 
 Every continuous slider has a selectable numeric input. Enter or blur commits a value, invalid text reverts, and valid values beyond an initial range extend the matching slider bound unless a simulation or WebGPU invariant requires clamping.
 
@@ -120,7 +125,7 @@ Every continuous slider has a selectable numeric input. Enter or blur commits a 
 
 - Ctrl/Cmd+Z: undo
 - Ctrl/Cmd+Y or Shift+Ctrl/Cmd+Z: redo
-- History covers deliberate control changes, Start/Pause, Reset, committed timeline seeks and branches, and complete model-rotation gestures.
+- History covers deliberate control changes, Start/Pause, Reset, committed timeline seeks and branches, and complete seed-rotation gestures.
 - Automatic simulation ticks and camera navigation are excluded. History retains up to 120 actions and budgets losslessly compressed aggregate snapshots to 128 MiB while preserving exact walker continuation state.
 
 ### Export

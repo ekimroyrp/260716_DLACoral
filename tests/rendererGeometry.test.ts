@@ -1,7 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { AttachmentNeighborhood } from '../src/types';
 import {
-  applySphereGapToGeometry,
+  applyParticleDimensionsToGeometry,
   createSphereGeometry,
 } from '../src/render/dlaRenderer';
 
@@ -10,8 +11,8 @@ describe('renderer icosphere geometry', () => {
     [0, 60],
     [1, 240],
     [2, 960],
-  ])('creates detail %i with %i non-indexed vertices', (detail, expectedVertices) => {
-    const { geometry } = createSphereGeometry(detail);
+  ])('creates resolution %i with %i non-indexed vertices', (resolution, expectedVertices) => {
+    const { geometry } = createSphereGeometry(resolution);
     try {
       expect(geometry.index).toBeNull();
       expect(geometry.getAttribute('position').count).toBe(expectedVertices);
@@ -41,23 +42,18 @@ describe('renderer icosphere geometry', () => {
     }
   });
 
-  it.each([0, 1, 2].flatMap((detail) => (
-    [6, 18, 26] as AttachmentNeighborhood[]
-  ).map((neighborhood) => [detail, neighborhood] as const)))(
-    'calibrates detail %i in neighborhood %i for contact and proportional gaps',
-    (detail, neighborhood) => {
-      const { geometry, basePositions } = createSphereGeometry(detail, neighborhood);
+  it.each([0, 1, 2])(
+    'uses one fixed resolution %i lattice-contact size with particle size, scale, and proportional gaps',
+    (resolution) => {
+      const { geometry, basePositions } = createSphereGeometry(resolution);
       try {
         const zeroGapDiameters = axisDiameters(geometry);
-        expectAllowedNeighborsContact(geometry, neighborhood);
-        if (neighborhood === 6) {
-          zeroGapDiameters.forEach((diameter) => expect(diameter).toBeCloseTo(1, 6));
-        }
-        applySphereGapToGeometry(geometry, basePositions, 0.25);
+        expectAllowedNeighborsContact(geometry, 26);
+        applyParticleDimensionsToGeometry(geometry, basePositions, 0.5, 0.25, 0.8);
         axisDiameters(geometry).forEach((diameter, axis) => {
-          expect(diameter).toBeCloseTo(zeroGapDiameters[axis] * 0.75, 6);
+          expect(diameter).toBeCloseTo(zeroGapDiameters[axis] * 0.5 * 0.75 * 0.8, 6);
         });
-        applySphereGapToGeometry(geometry, basePositions, 0);
+        applyParticleDimensionsToGeometry(geometry, basePositions, 1, 0, 1);
         axisDiameters(geometry).forEach((diameter, axis) => {
           expect(diameter).toBeCloseTo(zeroGapDiameters[axis], 6);
         });
@@ -66,6 +62,13 @@ describe('renderer icosphere geometry', () => {
       }
     },
   );
+
+  it('keeps attachment neighborhood out of sphere geometry updates', () => {
+    const rendererSource = readFileSync('src/render/dlaRenderer.ts', 'utf8');
+    expect(rendererSource).not.toContain('settings.attachmentNeighborhood');
+    expect(rendererSource).not.toContain('setSphereNeighborhood');
+    expect(rendererSource).not.toContain('currentNeighborhood');
+  });
 });
 
 function axisDiameters(

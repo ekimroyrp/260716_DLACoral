@@ -4,6 +4,12 @@ import { createAppSnapshot, createInitialAppState } from '../src/state';
 describe('app state snapshots', () => {
   it('copies settings and aggregate arrays', () => {
     const state = createInitialAppState();
+    expect(state.dla.particleSize).toBe(1);
+    expect(state.dla.particleScale).toBe(1);
+    expect(state.dla.particleResolution).toBe(2);
+    expect(state.display.gradientContrast).toBe(1.37);
+    expect(state.display.gradientBias).toBe(-0.74);
+    expect(state.display.gradientBlur).toBe(0.45);
     const positions = new Int32Array([0, 0, 0]);
     const enclosed = new Uint8Array([0]);
     const snapshot = createAppSnapshot(state, {
@@ -19,7 +25,9 @@ describe('app state snapshots', () => {
     positions[0] = 9;
     state.display.innerColor = '#000000';
     expect(snapshot.aggregate?.positions[0]).toBe(0);
-    expect(snapshot.display.innerColor).toBe('#6b2f24');
+    expect(snapshot.display.innerColor).toBe('#ac2a4a');
+    expect(snapshot.display.outerColor).toBe('#ffffff');
+    expect(snapshot.display.gradientContrast).toBe(1.37);
   });
 
   it('copies optional GPU walker state used by exact history restores', () => {

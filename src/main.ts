@@ -13,7 +13,7 @@ import {
   estimateSnapshotBytes,
   type CompressedDlaSnapshot,
 } from './history';
-import { DlaRenderer, type RotationPhase } from './render';
+import { DlaRenderer, type SeedRotationPhase } from './render';
 import {
   applySettingsSnapshot,
   createAppSnapshot,
@@ -59,7 +59,7 @@ let pendingTransaction: PendingTransaction | null = null;
 let disposed = false;
 let animationFrame = 0;
 let rendererCapacity = 0;
-let rendererDetail = -1;
+let rendererResolution = -1;
 
 ui = createUiController({
   onSimulationChange: handleSimulationChange,
@@ -71,8 +71,8 @@ ui = createUiController({
   onTimelineCommit: requestTimelineSeek,
   onUndo: undo,
   onRedo: redo,
-  onExportGlb: () => runExport('Preparing GLB…', (activeRenderer) => activeRenderer.exportGlb()),
-  onExportObj: () => runExport('Preparing OBJ…', (activeRenderer) => activeRenderer.exportObj()),
+  onExportGlb: () => runExport((activeRenderer) => activeRenderer.exportGlb()),
+  onExportObj: () => runExport((activeRenderer) => activeRenderer.exportObj()),
   onScreenshot: () => renderer?.exportScreenshot(),
   onTransactionStart: beginTransaction,
   onTransactionCommit: commitTransaction,
@@ -81,10 +81,10 @@ ui = createUiController({
 void initialize();
 
 async function initialize(): Promise<void> {
-  ui.setBusy('Initializing native WebGPU…');
+  ui.setBusy();
   try {
     const activeRenderer = new DlaRenderer(canvas, {
-      onModelRotationChange: handleModelRotation,
+      onSeedRotationChange: handleSeedRotation,
       onError: reportError,
     });
     renderer = activeRenderer;
@@ -94,13 +94,13 @@ async function initialize(): Promise<void> {
     simulator = activeSimulator;
     enforceDeviceLimits(state);
 
-    const targets = activeRenderer.prepareInstances(state.dla.targetParticles, state.dla.sphereDetail);
+    const targets = activeRenderer.prepareInstances(state.dla.targetParticles, state.dla.particleResolution);
     rendererCapacity = targets.capacity;
-    rendererDetail = state.dla.sphereDetail;
+    rendererResolution = state.dla.particleResolution;
     status = await activeSimulator.initialize(state.dla, targets);
 
     activeRenderer.update(state.dla, state.display, renderState(status));
-    activeRenderer.setModelRotation(state.dla.rotation);
+    activeRenderer.setSeedRotation(state.dla.seedRotation);
     syncStatus(status);
     ui.sync(state);
     ui.setReady();
@@ -150,7 +150,7 @@ function handleSimulationChange(settings: MutableAppState['simulation'], _meta: 
 
 function handleDlaChange(settings: MutableAppState['dla'], meta: DlaUiChangeMeta): void {
   const previousTarget = state.dla.targetParticles;
-  const previousDetail = state.dla.sphereDetail;
+  const previousResolution = state.dla.particleResolution;
   Object.assign(state.dla, settings);
   enforceDeviceLimits(state);
 
@@ -158,13 +158,14 @@ function handleDlaChange(settings: MutableAppState['dla'], meta: DlaUiChangeMeta
     state.dla.targetParticles !== settings.targetParticles
     || state.dla.walkerPool !== settings.walkerPool
     || state.dla.seedRadius !== settings.seedRadius
+    || state.dla.particleSize !== settings.particleSize
   ) {
     ui.sync({ dla: state.dla });
   }
 
   renderer?.updateDlaSettings(state.dla);
-  if (meta.source === 'rotation') {
-    renderer?.setModelRotation(state.dla.rotation);
+  if (meta.source === 'seedRotation') {
+    renderer?.setSeedRotation(state.dla.seedRotation);
     return;
   }
   if (meta.phase !== 'commit') {
@@ -175,11 +176,11 @@ function handleDlaChange(settings: MutableAppState['dla'], meta: DlaUiChangeMeta
     state.simulation.timeline = 0;
     state.simulation.latestTimeline = 0;
     ui.setTimeline(0, 0);
-    schedule(async () => resetAggregate('Rebuilding seed…'));
+    schedule(async () => resetAggregate());
     return;
   }
 
-  if (state.dla.sphereDetail !== previousDetail) {
+  if (state.dla.particleResolution !== previousResolution) {
     schedule(async () => rebindRendererTargets(true));
   } else if (state.dla.targetParticles > previousTarget && status && state.dla.targetParticles > status.particleCapacity) {
     schedule(async () => growParticleCapacity());
@@ -223,7 +224,7 @@ function handleReset(): void {
   state.simulation.timeline = 0;
   state.simulation.latestTimeline = 0;
   ui.setTimeline(0, 0);
-  schedule(async () => resetAggregate('Resetting aggregate…'));
+  schedule(async () => resetAggregate());
 }
 
 function requestTimelineSeek(value: number): void {
@@ -255,29 +256,29 @@ function requestTimelineSeek(value: number): void {
   });
 }
 
-function handleModelRotation(rotation: number, phase: RotationPhase): void {
+function handleSeedRotation(rotation: number, phase: SeedRotationPhase): void {
   if (phase === 'begin') {
-    ui.beginTransaction('Rotation');
+    ui.beginTransaction('Seed Rotation');
   }
-  state.dla.rotation = normalizeRotation(rotation);
-  ui.setRotation(state.dla.rotation);
-  renderer?.setModelRotation(state.dla.rotation);
+  state.dla.seedRotation = normalizeSeedRotation(rotation);
+  ui.setSeedRotation(state.dla.seedRotation);
+  renderer?.setSeedRotation(state.dla.seedRotation);
   if (phase === 'end') {
-    ui.commitTransaction('Rotation');
+    ui.commitTransaction('Seed Rotation');
   }
 }
 
-async function resetAggregate(message: string): Promise<void> {
+async function resetAggregate(): Promise<void> {
   const activeRenderer = requireRenderer();
   const activeSimulator = requireSimulator();
-  ui.setBusy(message);
+  ui.setBusy();
   try {
     enforceDeviceLimits(state);
     let targets = activeRenderer.getRenderTargets();
-    if (!targets || targets.capacity < state.dla.targetParticles || rendererDetail !== state.dla.sphereDetail) {
-      targets = activeRenderer.prepareInstances(state.dla.targetParticles, state.dla.sphereDetail);
+    if (!targets || targets.capacity < state.dla.targetParticles || rendererResolution !== state.dla.particleResolution) {
+      targets = activeRenderer.prepareInstances(state.dla.targetParticles, state.dla.particleResolution);
       rendererCapacity = targets.capacity;
-      rendererDetail = state.dla.sphereDetail;
+      rendererResolution = state.dla.particleResolution;
     }
     const next = await activeSimulator.initialize(state.dla, targets);
     status = next;
@@ -296,14 +297,14 @@ async function rebindRendererTargets(force: boolean): Promise<void> {
     status?.latestCount ?? 1,
     existing?.capacity ?? 1,
   );
-  if (!force && existing && existing.capacity >= capacity && rendererDetail === state.dla.sphereDetail) {
+  if (!force && existing && existing.capacity >= capacity && rendererResolution === state.dla.particleResolution) {
     return;
   }
-  ui.setBusy('Updating sphere geometry…');
+  ui.setBusy();
   try {
-    const targets = activeRenderer.prepareInstances(capacity, state.dla.sphereDetail);
+    const targets = activeRenderer.prepareInstances(capacity, state.dla.particleResolution);
     rendererCapacity = targets.capacity;
-    rendererDetail = state.dla.sphereDetail;
+    rendererResolution = state.dla.particleResolution;
     const next = await activeSimulator.rebindRenderTargets(targets);
     await activeSimulator.setVertexCount(targets.vertexCount);
     status = next;
@@ -316,12 +317,12 @@ async function rebindRendererTargets(force: boolean): Promise<void> {
 async function growParticleCapacity(): Promise<void> {
   const activeRenderer = requireRenderer();
   const activeSimulator = requireSimulator();
-  ui.setBusy('Growing GPU buffers…');
+  ui.setBusy();
   try {
     const aggregate = await activeSimulator.snapshot();
-    const targets = activeRenderer.prepareInstances(state.dla.targetParticles, state.dla.sphereDetail);
+    const targets = activeRenderer.prepareInstances(state.dla.targetParticles, state.dla.particleResolution);
     rendererCapacity = targets.capacity;
-    rendererDetail = state.dla.sphereDetail;
+    rendererResolution = state.dla.particleResolution;
     const next = await activeSimulator.restore(state.dla, aggregate, targets);
     status = next;
     syncStatus(next);
@@ -334,7 +335,7 @@ function syncStatus(next: DlaStatus): void {
   state.simulation.timeline = next.attachedCount;
   state.simulation.latestTimeline = next.latestAttachedCount;
   ui.setTimeline(next.attachedCount, next.latestAttachedCount);
-  ui.setParticleCount(next.currentCount, state.dla.targetParticles);
+  ui.setParticleCount(next.visibleCount);
   const activeRenderer = renderer;
   if (activeRenderer) {
     activeRenderer.update(state.dla, state.display, renderState(next));
@@ -392,7 +393,13 @@ function commitTransaction(label: string): void {
 }
 
 function transactionNeedsAggregate(label: string): boolean {
-  if (label === 'Reset Simulation' || label === 'Seed' || label === 'Seed Shape' || label === 'Seed Radius') {
+  if (
+    label === 'Reset Simulation'
+    || label === 'Seed'
+    || label === 'Seed Shape'
+    || label === 'Seed Radius'
+    || label === 'Particle Size'
+  ) {
     return true;
   }
   return label === 'Start Simulation' && Boolean(status && status.currentCount < status.latestCount);
@@ -441,15 +448,15 @@ function restoreHistorySnapshot(snapshot: HistorySnapshot): void {
     enforceDeviceLimits(state);
 
     const needsTargets =
-      rendererCapacity < state.dla.targetParticles || rendererDetail !== state.dla.sphereDetail;
+      rendererCapacity < state.dla.targetParticles || rendererResolution !== state.dla.particleResolution;
     let targets = activeRenderer.getRenderTargets();
     if (needsTargets || !targets) {
       targets = activeRenderer.prepareInstances(
         Math.max(state.dla.targetParticles, snapshot.aggregate?.latestCount ?? 1),
-        state.dla.sphereDetail,
+        state.dla.particleResolution,
       );
       rendererCapacity = targets.capacity;
-      rendererDetail = state.dla.sphereDetail;
+      rendererResolution = state.dla.particleResolution;
     }
 
     let next: DlaStatus;
@@ -478,15 +485,15 @@ function restoreHistorySnapshot(snapshot: HistorySnapshot): void {
     status = next;
     activeRenderer.updateDlaSettings(state.dla);
     activeRenderer.updateDisplay(state.display);
-    activeRenderer.setModelRotation(state.dla.rotation);
+    activeRenderer.setSeedRotation(state.dla.seedRotation);
     ui.sync(state);
     syncStatus(next);
   });
 }
 
-function runExport(message: string, action: (activeRenderer: DlaRenderer) => Promise<void>): void {
+function runExport(action: (activeRenderer: DlaRenderer) => Promise<void>): void {
   schedule(async () => {
-    ui.setBusy(message);
+    ui.setBusy();
     try {
       await action(requireRenderer());
     } finally {
@@ -512,13 +519,22 @@ function enforceDeviceLimits(targetState: MutableAppState): void {
   const maxParticles = rawMaxParticles >= 1_000
     ? Math.max(1_000, Math.floor(rawMaxParticles / 1_000) * 1_000)
     : rawMaxParticles;
+  targetState.dla.particleSize = Math.max(
+    0.01,
+    Number.isFinite(targetState.dla.particleSize) ? targetState.dla.particleSize : 1,
+  );
   targetState.dla.seedRadius = clampSeedRadius(
     targetState.dla.seedShape,
     targetState.dla.seedRadius,
     maxParticles,
     limits.maxSeedRadius,
+    targetState.dla.particleSize,
   );
-  const seedCount = countSeedPositions(targetState.dla.seedShape, targetState.dla.seedRadius);
+  const seedCount = countSeedPositions(
+    targetState.dla.seedShape,
+    targetState.dla.seedRadius,
+    targetState.dla.particleSize,
+  );
   targetState.dla.targetParticles = Math.min(
     maxParticles,
     Math.max(seedCount, Math.round(targetState.dla.targetParticles)),
@@ -527,7 +543,9 @@ function enforceDeviceLimits(targetState: MutableAppState): void {
     limits.maxWalkers,
     Math.max(1, Math.round(targetState.dla.walkerPool)),
   );
-  targetState.dla.sphereDetail = Math.min(2, Math.max(0, Math.round(targetState.dla.sphereDetail)));
+  targetState.dla.particleScale = Math.max(0.01, targetState.dla.particleScale);
+  targetState.dla.particleGap = Math.max(0, targetState.dla.particleGap);
+  targetState.dla.particleResolution = Math.min(2, Math.max(0, Math.round(targetState.dla.particleResolution)));
   targetState.dla.stickChance = Math.min(1, Math.max(0.01, targetState.dla.stickChance));
   targetState.dla.stickNeighbors = Math.min(
     targetState.dla.attachmentNeighborhood,
@@ -541,16 +559,20 @@ function clampSeedRadius(
   radius: number,
   maxParticles: number,
   latticeMaximum: number,
+  particleSize: number,
 ): number {
   const requested = Math.max(1, Math.round(Number.isFinite(radius) ? radius : 1));
   if (shape === 'point') {
     return requested;
   }
-  const latticeClamped = Math.min(requested, Math.max(1, Math.floor(latticeMaximum)));
-  if (countSeedPositions(shape, latticeClamped) <= maxParticles) {
+  const latticeClamped = Math.min(
+    requested,
+    Math.max(1, Math.floor(latticeMaximum * Math.max(0.001, particleSize))),
+  );
+  if (countSeedPositions(shape, latticeClamped, particleSize) <= maxParticles) {
     return latticeClamped;
   }
-  return maxSeedRadiusForCapacity(shape, maxParticles, latticeClamped);
+  return maxSeedRadiusForCapacity(shape, maxParticles, latticeMaximum, particleSize);
 }
 
 function serial<T>(task: () => Promise<T> | T): Promise<T> {
@@ -581,7 +603,7 @@ function createHistorySnapshot(): HistorySnapshot {
   };
 }
 
-function normalizeRotation(value: number): number {
+function normalizeSeedRotation(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
   }

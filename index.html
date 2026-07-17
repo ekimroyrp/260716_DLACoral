@@ -34,7 +34,8 @@
       </div>
 
       <div class="ui-body panel-sections">
-        <div class="control-hint">Wheel = Zoom, MMB = Pan, RMB = Orbit, LMB = Rotate Model</div>
+        <div id="particle-count-note" class="control-hint">Particle Count = 1</div>
+        <div id="fatal-error-note" class="control-hint fatal-error-note" role="alert" hidden></div>
 
         <section class="panel-section">
           <div class="panel-section-header">
@@ -66,10 +67,9 @@
 
         <section class="panel-section">
           <div class="panel-section-header">
-            <span class="panel-section-label">Diffusion-Limited Aggregation</span>
+            <span class="panel-section-label">Aggregation</span>
           </div>
           <div class="panel-section-content panel-controls-stack">
-            <div id="particle-count-note" class="control-hint">Particles = 1 / 1,000,000</div>
 
             <label class="control">
               <div class="control-row">
@@ -98,6 +98,46 @@
                 <input id="seed-radius-value" class="value-input" type="number" min="1" max="64" step="1" value="8" />
               </div>
               <input type="range" id="seed-radius" min="1" max="64" step="1" value="8" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Seed Rotation</span>
+                <input id="seed-rotation-value" class="value-input" type="number" min="-360" max="360" step="1" value="0" />
+              </div>
+              <input type="range" id="seed-rotation" min="-360" max="360" step="1" value="0" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Particle Size</span>
+                <input id="particle-size-value" class="value-input" type="number" min="0.10" max="4.00" step="0.01" value="1.00" />
+              </div>
+              <input type="range" id="particle-size" min="0.10" max="4.00" step="0.01" value="1" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Particle Gap</span>
+                <input id="particle-gap-value" class="value-input" type="number" min="0" max="0.38" step="0.01" value="0.00" />
+              </div>
+              <input type="range" id="particle-gap" min="0" max="0.38" step="0.01" value="0" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Particle Scale</span>
+                <input id="particle-scale-value" class="value-input" type="number" min="0.10" max="3.00" step="0.01" value="1.00" />
+              </div>
+              <input type="range" id="particle-scale" min="0.10" max="3.00" step="0.01" value="1" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Particle Resolution</span>
+                <input id="particle-resolution-value" class="value-input" type="number" min="0" max="2" step="1" value="2" />
+              </div>
+              <input type="range" id="particle-resolution" min="0" max="2" step="1" value="2" />
             </label>
 
             <label class="control">
@@ -170,38 +210,6 @@
               <input type="range" id="walker-pool" min="1024" max="131072" step="1024" value="65536" />
             </label>
 
-            <label class="control">
-              <div class="control-row">
-                <span>Rotation</span>
-                <input id="rotation-value" class="value-input" type="number" min="-360" max="360" step="1" value="0" />
-              </div>
-              <input type="range" id="rotation" min="-360" max="360" step="1" value="0" />
-            </label>
-
-            <label class="control">
-              <div class="control-row">
-                <span>Sphere Scale</span>
-                <input id="sphere-scale-value" class="value-input" type="number" min="0.42" max="1.15" step="0.01" value="1.00" />
-              </div>
-              <input type="range" id="sphere-scale" min="0.42" max="1.15" step="0.01" value="1" />
-            </label>
-
-            <label class="control">
-              <div class="control-row">
-                <span>Sphere Gap</span>
-                <input id="sphere-gap-value" class="value-input" type="number" min="0" max="0.38" step="0.01" value="0.00" />
-              </div>
-              <input type="range" id="sphere-gap" min="0" max="0.38" step="0.01" value="0" />
-            </label>
-
-            <label class="control">
-              <div class="control-row">
-                <span>Sphere Detail</span>
-                <input id="sphere-detail-value" class="value-input" type="number" min="0" max="2" step="1" value="0" />
-              </div>
-              <input type="range" id="sphere-detail" min="0" max="2" step="1" value="0" />
-            </label>
-
             <label class="toggle-control toggle-inline">
               <span>Hide Enclosed</span>
               <input type="checkbox" id="hide-enclosed" checked />
@@ -214,49 +222,73 @@
             <span class="panel-section-label">Display</span>
           </div>
           <div class="panel-section-content panel-controls-stack">
-            <div class="state-color-stack">
-              <label class="control state-color-block" for="inner-color">
-                <div class="control-row"><span>Inner Color</span></div>
-                <input type="color" id="inner-color" class="color-picker" value="#6b2f24" />
+            <div class="control control-grid-2 gradient-swatches">
+              <label class="control compact" for="inner-color">
+                <div class="control-row"><span>Gradient Start</span></div>
+                <input type="color" id="inner-color" class="color-picker" value="#ac2a4a" />
               </label>
-              <label class="control state-color-block" for="outer-color">
-                <div class="control-row"><span>Outer Color</span></div>
-                <input type="color" id="outer-color" class="color-picker" value="#f4e6d2" />
+              <label class="control compact" for="outer-color">
+                <div class="control-row"><span>Gradient End</span></div>
+                <input type="color" id="outer-color" class="color-picker" value="#ffffff" />
               </label>
             </div>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Gradient Contrast</span>
+                <input id="gradient-contrast-value" class="value-input" type="number" min="0.2" max="3" step="0.01" value="1.37" />
+              </div>
+              <input type="range" id="gradient-contrast" min="0.2" max="3" step="0.01" value="1.37" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Gradient Bias</span>
+                <input id="gradient-bias-value" class="value-input" type="number" min="-1" max="1" step="0.01" value="-0.74" />
+              </div>
+              <input type="range" id="gradient-bias" min="-1" max="1" step="0.01" value="-0.74" />
+            </label>
+
+            <label class="control">
+              <div class="control-row">
+                <span>Gradient Blur</span>
+                <input id="gradient-blur-value" class="value-input" type="number" min="0" max="1" step="0.01" value="0.45" />
+              </div>
+              <input type="range" id="gradient-blur" min="0" max="1" step="0.01" value="0.45" />
+            </label>
 
             <div class="control-subhead">Lighting</div>
 
             <label class="control">
               <div class="control-row">
                 <span>Light Azimuth</span>
-                <input id="light-azimuth-value" class="value-input" type="number" min="-180" max="180" step="0.01" value="25.65" />
+                <input id="light-azimuth-value" class="value-input" type="number" min="-180" max="180" step="0.01" value="-3.08" />
               </div>
-              <input type="range" id="light-azimuth" min="-180" max="180" step="0.01" value="25.65" />
+              <input type="range" id="light-azimuth" min="-180" max="180" step="0.01" value="-3.08" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Light Elevation</span>
-                <input id="light-elevation-value" class="value-input" type="number" min="-20" max="85" step="0.01" value="68.70" />
+                <input id="light-elevation-value" class="value-input" type="number" min="-20" max="85" step="0.01" value="55.79" />
               </div>
-              <input type="range" id="light-elevation" min="-20" max="85" step="0.01" value="68.7" />
+              <input type="range" id="light-elevation" min="-20" max="85" step="0.01" value="55.79" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Key Brightness</span>
-                <input id="key-brightness-value" class="value-input" type="number" min="0" max="12" step="0.01" value="2.41" />
+                <input id="key-brightness-value" class="value-input" type="number" min="0" max="12" step="0.01" value="3.37" />
               </div>
-              <input type="range" id="key-brightness" min="0" max="12" step="0.01" value="2.41" />
+              <input type="range" id="key-brightness" min="0" max="12" step="0.01" value="3.37" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Ambient Fill</span>
-                <input id="ambient-fill-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.30" />
+                <input id="ambient-fill-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.80" />
               </div>
-              <input type="range" id="ambient-fill" min="0" max="2" step="0.01" value="0.3" />
+              <input type="range" id="ambient-fill" min="0" max="2" step="0.01" value="0.8" />
             </label>
 
             <label class="control">
@@ -270,25 +302,25 @@
             <label class="control">
               <div class="control-row">
                 <span>Bounce Brightness</span>
-                <input id="bounce-brightness-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.07" />
+                <input id="bounce-brightness-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.45" />
               </div>
-              <input type="range" id="bounce-brightness" min="0" max="2" step="0.01" value="0.07" />
+              <input type="range" id="bounce-brightness" min="0" max="2" step="0.01" value="0.45" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Shadow Strength</span>
-                <input id="shadow-strength-value" class="value-input" type="number" min="0" max="1.5" step="0.01" value="1.08" />
+                <input id="shadow-strength-value" class="value-input" type="number" min="0" max="1.5" step="0.01" value="1.13" />
               </div>
-              <input type="range" id="shadow-strength" min="0" max="1.5" step="0.01" value="1.08" />
+              <input type="range" id="shadow-strength" min="0" max="1.5" step="0.01" value="1.13" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Shadow Softness</span>
-                <input id="shadow-softness-value" class="value-input" type="number" min="0" max="5" step="0.01" value="2.60" />
+                <input id="shadow-softness-value" class="value-input" type="number" min="0" max="5" step="0.01" value="2.09" />
               </div>
-              <input type="range" id="shadow-softness" min="0" max="5" step="0.01" value="2.6" />
+              <input type="range" id="shadow-softness" min="0" max="5" step="0.01" value="2.09" />
             </label>
 
             <div class="control-subhead">Image</div>
@@ -296,57 +328,57 @@
             <label class="control">
               <div class="control-row">
                 <span>Exposure</span>
-                <input id="exposure-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="0.70" />
+                <input id="exposure-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="0.68" />
               </div>
-              <input type="range" id="exposure" min="0.1" max="3" step="0.01" value="0.7" />
+              <input type="range" id="exposure" min="0.1" max="3" step="0.01" value="0.68" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Brightness</span>
-                <input id="brightness-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="1.00" />
+                <input id="brightness-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="1.15" />
               </div>
-              <input type="range" id="brightness" min="0.1" max="3" step="0.01" value="1" />
+              <input type="range" id="brightness" min="0.1" max="3" step="0.01" value="1.15" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Contrast</span>
-                <input id="contrast-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="2.25" />
+                <input id="contrast-value" class="value-input" type="number" min="0.1" max="3" step="0.01" value="2.55" />
               </div>
-              <input type="range" id="contrast" min="0.1" max="3" step="0.01" value="2.25" />
+              <input type="range" id="contrast" min="0.1" max="3" step="0.01" value="2.55" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Roughness</span>
-                <input id="roughness-value" class="value-input" type="number" min="0" max="1" step="0.01" value="0.92" />
+                <input id="roughness-value" class="value-input" type="number" min="0" max="1" step="0.01" value="0.00" />
               </div>
-              <input type="range" id="roughness" min="0" max="1" step="0.01" value="0.92" />
+              <input type="range" id="roughness" min="0" max="1" step="0.01" value="0" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Bloom Strength</span>
-                <input id="bloom-strength-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.08" />
+                <input id="bloom-strength-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.13" />
               </div>
-              <input type="range" id="bloom-strength" min="0" max="2" step="0.01" value="0.08" />
+              <input type="range" id="bloom-strength" min="0" max="2" step="0.01" value="0.13" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Bloom Radius</span>
-                <input id="bloom-radius-value" class="value-input" type="number" min="0" max="1" step="0.01" value="0.26" />
+                <input id="bloom-radius-value" class="value-input" type="number" min="0" max="1" step="0.01" value="0.24" />
               </div>
-              <input type="range" id="bloom-radius" min="0" max="1" step="0.01" value="0.26" />
+              <input type="range" id="bloom-radius" min="0" max="1" step="0.01" value="0.24" />
             </label>
 
             <label class="control">
               <div class="control-row">
                 <span>Bloom Threshold</span>
-                <input id="bloom-threshold-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.00" />
+                <input id="bloom-threshold-value" class="value-input" type="number" min="0" max="2" step="0.01" value="0.19" />
               </div>
-              <input type="range" id="bloom-threshold" min="0" max="2" step="0.01" value="0" />
+              <input type="range" id="bloom-threshold" min="0" max="2" step="0.01" value="0.19" />
             </label>
           </div>
         </section>
@@ -365,8 +397,6 @@
 
       <div id="ui-handle-bottom"></div>
     </aside>
-
-    <div id="status-overlay" role="status" aria-live="polite"></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

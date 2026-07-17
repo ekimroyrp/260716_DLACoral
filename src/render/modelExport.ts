@@ -25,10 +25,12 @@ export interface ExportInstanceData {
   gradientCount: number;
   spherePositions: Float32Array;
   sphereNormals: Float32Array;
-  sphereScale: number;
-  rotationDegrees: number;
+  seedRotationDegrees: number;
   innerColor: string;
   outerColor: string;
+  gradientContrast: number;
+  gradientBias: number;
+  gradientBlur: number;
   brightness: number;
   contrast: number;
   materialRoughness: number;
@@ -46,16 +48,45 @@ export function createAgeGradientColors(data: ExportInstanceData): Float32Array 
 
   for (let i = 0; i < data.count; i++) {
     const rank = data.birthRanks[i] ?? i;
-    const age = rank < data.seedCount
+    const linearAge = rank < data.seedCount
       ? 0
       : clamp01((rank - data.seedCount + 1) / attachedCount);
+    const age = shapeAgeGradient(
+      linearAge,
+      data.gradientContrast,
+      data.gradientBias,
+      data.gradientBlur,
+    );
     const offset = i * 3;
-    colors[offset] = gradeColor(inner.r + (outer.r - inner.r) * age, data.brightness, data.contrast);
-    colors[offset + 1] = gradeColor(inner.g + (outer.g - inner.g) * age, data.brightness, data.contrast);
-    colors[offset + 2] = gradeColor(inner.b + (outer.b - inner.b) * age, data.brightness, data.contrast);
+    const seedParticle = rank < data.seedCount;
+    const red = inner.r + (outer.r - inner.r) * age;
+    const green = inner.g + (outer.g - inner.g) * age;
+    const blue = inner.b + (outer.b - inner.b) * age;
+    colors[offset] = seedParticle ? clamp01(red) : gradeColor(red, data.brightness, data.contrast);
+    colors[offset + 1] = seedParticle ? clamp01(green) : gradeColor(green, data.brightness, data.contrast);
+    colors[offset + 2] = seedParticle ? clamp01(blue) : gradeColor(blue, data.brightness, data.contrast);
   }
 
   return colors;
+}
+
+/**
+ * Applies the DifferentialGrowth contrast/bias curve to birth age. Blur softens
+ * that grading toward the underlying linear age ramp while endpoints remain exact.
+ */
+export function shapeAgeGradient(
+  age: number,
+  contrast: number,
+  bias: number,
+  blur: number,
+): number {
+  const linearAge = clamp01(age);
+  if (linearAge <= 0 || linearAge >= 1) {
+    return linearAge;
+  }
+  const shapedAge = clamp01(linearAge * contrast + bias);
+  const blurAmount = clamp01(blur);
+  return shapedAge + (linearAge - shapedAge) * blurAmount;
 }
 
 /** Creates a compact GLB using EXT_mesh_gpu_instancing. */
@@ -166,8 +197,7 @@ function createInstancedExportScene(data: ExportInstanceData): Scene {
   mesh.instanceMatrix.needsUpdate = true;
   mesh.instanceColor = new InstancedBufferAttribute(createAgeGradientColors(data), 3);
   mesh.instanceColor.needsUpdate = true;
-  mesh.rotation.y = data.rotationDegrees * DEG_TO_RAD;
-  mesh.scale.setScalar(data.sphereScale);
+  mesh.rotation.y = data.seedRotationDegrees * DEG_TO_RAD;
   mesh.count = data.count;
   mesh.updateMatrix();
   mesh.updateMatrixWorld(true);
@@ -178,8 +208,8 @@ function createInstancedExportScene(data: ExportInstanceData): Scene {
 function createObjectMatrix(data: ExportInstanceData): Matrix4 {
   return new Matrix4().compose(
     new Vector3(),
-    new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), data.rotationDegrees * DEG_TO_RAD),
-    new Vector3(data.sphereScale, data.sphereScale, data.sphereScale),
+    new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), data.seedRotationDegrees * DEG_TO_RAD),
+    new Vector3(1, 1, 1),
   );
 }
 

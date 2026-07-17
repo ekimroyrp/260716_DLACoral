@@ -236,6 +236,10 @@ select {
   gap: 6px;
 }
 
+.control.compact {
+  gap: 4px;
+}
+
 .control-grid-2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -292,18 +296,8 @@ select {
   letter-spacing: 0.02em;
 }
 
-.state-color-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.state-color-block {
-  gap: 7px;
-  padding: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.11);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.045);
+.gradient-swatches {
+  flex: 0 0 auto;
 }
 
 .toggle-control input[type="checkbox"] {
@@ -553,36 +547,14 @@ input[type="range"]::-moz-range-thumb {
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.18);
 }
 
-#status-overlay {
-  position: fixed;
-  left: 50%;
-  top: 20px;
-  z-index: 5;
-  max-width: min(520px, calc(100vw - 40px));
-  padding: 9px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 10px;
-  opacity: 0;
-  background: rgba(18, 19, 24, 0.72);
-  color: rgba(245, 246, 249, 0.94);
-  font-family: "SFMono-Regular", "Cascadia Mono", "Consolas", monospace;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0;
-  pointer-events: none;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.68);
-  transform: translateX(-50%);
-  transition: opacity 160ms ease;
-  backdrop-filter: blur(12px) saturate(145%);
-}
-
-#status-overlay.is-visible {
-  opacity: 1;
-}
-
-#status-overlay.is-error {
-  border-color: rgba(255, 98, 98, 0.5);
+.fatal-error-note {
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 98, 98, 0.45);
+  border-radius: 8px;
   color: #ffb9b9;
+  line-height: 1.4;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 @keyframes panel-entrance {
